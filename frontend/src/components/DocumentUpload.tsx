@@ -38,11 +38,8 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onSuccess }) => {
       return;
     }
 
-    // Validate file size (50MB)
-    if (file.size > 50 * 1024 * 1024) {
-      setError('File size must be less than 50MB');
-      return;
-    }
+    // No file size validation - allow any size
+    // File size validation removed to allow unlimited uploads
 
     setError(undefined);
     setNewDoc(prev => ({ 
@@ -181,7 +178,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onSuccess }) => {
                   }
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
-                  Only PDF files up to 50MB are supported
+                  Only PDF files are supported (no size limit)
                 </p>
               </div>
             </div>

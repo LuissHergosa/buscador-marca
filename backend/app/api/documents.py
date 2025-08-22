@@ -6,8 +6,9 @@ import logging
 import os
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File
+import asyncio
 
-from ..models.document import Document
+from ..models.document import Document, DocumentCreate
 from ..models.processing_status import ProcessingStatus
 from ..models.brand_detection import BrandReviewUpdate
 from ..services.processing_service import processing_service
@@ -53,6 +54,7 @@ def validate_file_extension(filename: str) -> None:
 async def upload_document(file: UploadFile = File(...)) -> Document:
     """
     Upload a PDF document for brand detection analysis.
+    Returns immediately after starting processing.
 
     Args:
         file: PDF file to upload
@@ -78,13 +80,24 @@ async def upload_document(file: UploadFile = File(...)) -> Document:
         logger.info("Validating file size")
         validate_file_size(len(file_content))
 
-        # Process document
-        logger.info("Starting document processing")
-        document = await processing_service.process_document(
-            file_content, file.filename
+        # Create document record immediately
+        logger.info("Creating document record in Firebase")
+        document_data = DocumentCreate(
+            filename=file.filename,
+            total_pages=0  # Will be updated during processing
+        )
+        document = await firebase_service.create_document(document_data)
+        logger.info(f"Document created in Firebase: {document.id}")
+
+        # Start async processing without waiting
+        logger.info("Starting async document processing")
+        asyncio.create_task(
+            processing_service.process_document_async(
+                document.id, file_content, file.filename
+            )
         )
 
-        logger.info(f"Document upload completed successfully: {document.id}")
+        logger.info(f"Document upload initiated successfully: {document.id}")
         return document
 
     except HTTPException:

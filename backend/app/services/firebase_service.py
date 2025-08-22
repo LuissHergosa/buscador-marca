@@ -405,12 +405,19 @@ class FirebaseService:
         try:
             doc_ref = self.documents_collection.document(document_id)
 
-            update_data = {f"results.{page_number}.status": status}
+            # Create complete result data with all required fields
+            result_data = {
+                f"results.{page_number}.page_number": page_number,
+                f"results.{page_number}.brands_detected": [],
+                f"results.{page_number}.processing_time": 0.0,
+                f"results.{page_number}.status": status,
+                f"results.{page_number}.brands_review_status": {},
+            }
 
             if error_message:
-                update_data[f"results.{page_number}.error_message"] = error_message
+                result_data[f"results.{page_number}.error_message"] = error_message
 
-            doc_ref.update(update_data)
+            doc_ref.update(result_data)
         except FirebaseError as e:
             raise Exception(f"Failed to update page status: {str(e)}")
 

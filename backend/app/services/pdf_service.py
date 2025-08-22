@@ -1,13 +1,16 @@
 """
 PDF processing service for extracting pages and converting to images in memory.
+Optimized for performance with parallel processing and memory efficiency.
 """
 
 import io
 import logging
-from typing import List, Tuple
+import asyncio
+from typing import List, Tuple, Optional
 import PyPDF2
 from pdf2image import convert_from_bytes
 from PIL import Image
+import concurrent.futures
 
 from ..config import settings
 
@@ -20,12 +23,17 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 class PDFService:
-    """Service for PDF processing operations in memory."""
+    """Service for PDF processing operations in memory with performance optimizations."""
     
     def __init__(self):
-        """Initialize PDF service."""
-        logger.info("PDFService initialized with no image size limits")
-        pass
+        """Initialize PDF service with thread pool for parallel processing."""
+        logger.info("PDFService initialized with performance optimizations")
+        # Create thread pool for CPU-intensive operations
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(8, settings.max_concurrent_pages),
+            thread_name_prefix="pdf_worker"
+        )
+        logger.info(f"Thread pool initialized with {min(8, settings.max_concurrent_pages)} workers")
     
     async def validate_pdf(self, file_content: bytes) -> Tuple[bool, str, int]:
         """
@@ -40,6 +48,23 @@ class PDFService:
         try:
             logger.info(f"Validating PDF file (size: {len(file_content)} bytes)")
             
+            # Run validation in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self.executor,
+                self._validate_pdf_sync,
+                file_content
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error reading PDF: {str(e)}")
+            return False, f"Error reading PDF: {str(e)}", 0
+    
+    def _validate_pdf_sync(self, file_content: bytes) -> Tuple[bool, str, int]:
+        """Synchronous PDF validation for thread pool execution."""
+        try:
             # Create file-like object from bytes
             pdf_stream = io.BytesIO(file_content)
             pdf_reader = PyPDF2.PdfReader(pdf_stream)
@@ -52,10 +77,6 @@ class PDFService:
             # Get total pages
             total_pages = len(pdf_reader.pages)
             logger.info(f"PDF validation successful: {total_pages} pages found")
-            
-            # Check page limit
-            if total_pages > 100:
-                logger.warning(f"PDF has many pages ({total_pages}), but processing will continue")
             
             # Check if PDF is empty
             if total_pages == 0:
@@ -74,14 +95,18 @@ class PDFService:
     async def extract_pages_as_images(
         self, 
         file_content: bytes,
-        dpi: int = None
+        dpi: int = None,
+        start_page: int = 1,
+        end_page: Optional[int] = None
     ) -> List[Image.Image]:
         """
-        Extract all pages from PDF as PIL Image objects in memory.
+        Extract pages from PDF as PIL Image objects with parallel processing.
         
         Args:
             file_content: PDF file content as bytes
             dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
+            start_page: First page to extract (1-based)
+            end_page: Last page to extract (inclusive, None for all pages)
             
         Returns:
             List of PIL Image objects
@@ -93,19 +118,24 @@ class PDFService:
             
             logger.info(f"Extracting PDF pages as images with DPI: {dpi}")
             logger.info(f"File size: {len(file_content)} bytes")
+            logger.info(f"Page range: {start_page} to {end_page or 'end'}")
             
-            # Convert PDF pages to images in memory with higher resolution
-            images = convert_from_bytes(
+            # Run conversion in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            images = await loop.run_in_executor(
+                self.executor,
+                self._extract_pages_sync,
                 file_content,
-                dpi=dpi,
-                fmt='PNG'
+                dpi,
+                start_page,
+                end_page
             )
             
             logger.info(f"Successfully extracted {len(images)} pages as images")
             
             # Log image details for debugging
             for i, image in enumerate(images):
-                logger.info(f"Page {i+1}: Size={image.size}, Mode={image.mode}, Format={image.format}")
+                logger.info(f"Page {start_page + i}: Size={image.size}, Mode={image.mode}")
             
             return images
             
@@ -114,9 +144,36 @@ class PDFService:
             logger.error(f"File size: {len(file_content)} bytes, DPI: {dpi}")
             raise Exception(f"Failed to extract pages as images: {str(e)}")
     
+    def _extract_pages_sync(
+        self, 
+        file_content: bytes, 
+        dpi: int, 
+        start_page: int, 
+        end_page: Optional[int]
+    ) -> List[Image.Image]:
+        """Synchronous page extraction for thread pool execution."""
+        try:
+            # Convert PDF pages to images in memory with optimized settings
+            images = convert_from_bytes(
+                file_content,
+                dpi=dpi,
+                fmt='PNG',
+                first_page=start_page,
+                last_page=end_page,
+                # Use multiple threads for conversion
+                thread_count=min(4, settings.max_concurrent_pages)
+            )
+            
+            return images
+            
+        except Exception as e:
+            logger.error(f"Failed to extract pages synchronously: {str(e)}")
+            raise e
+    
     async def optimize_image(self, image: Image.Image, max_size: int = None) -> Image.Image:
         """
         Optimize image for AI processing in memory while preserving text clarity.
+        Uses parallel processing for optimization.
         
         Args:
             image: PIL Image object
@@ -133,6 +190,25 @@ class PDFService:
             original_size = image.size
             logger.info(f"Optimizing image: Original size={original_size}, Max size={max_size}")
             
+            # Run optimization in thread pool
+            loop = asyncio.get_event_loop()
+            optimized_image = await loop.run_in_executor(
+                self.executor,
+                self._optimize_image_sync,
+                image,
+                max_size
+            )
+            
+            return optimized_image
+            
+        except Exception as e:
+            logger.error(f"Failed to optimize image: {str(e)}")
+            logger.error(f"Image size: {image.size}, Mode: {image.mode}")
+            raise Exception(f"Failed to optimize image: {str(e)}")
+    
+    def _optimize_image_sync(self, image: Image.Image, max_size: int) -> Image.Image:
+        """Synchronous image optimization for thread pool execution."""
+        try:
             # Convert to RGB if necessary
             if image.mode != 'RGB':
                 logger.info(f"Converting image from {image.mode} to RGB")
@@ -151,30 +227,32 @@ class PDFService:
             return image
             
         except Exception as e:
-            logger.error(f"Failed to optimize image: {str(e)}")
-            logger.error(f"Image size: {image.size}, Mode: {image.mode}")
-            raise Exception(f"Failed to optimize image: {str(e)}")
+            logger.error(f"Failed to optimize image synchronously: {str(e)}")
+            raise e
     
-    async def process_pdf(
+    async def process_pdf_parallel(
         self, 
         file_content: bytes, 
         filename: str,
-        dpi: int = None
+        dpi: int = None,
+        batch_size: int = 5
     ) -> Tuple[List[Image.Image], int]:
         """
-        Process PDF file in memory: validate and extract pages as optimized images.
+        Process PDF file with parallel processing for better performance.
         
         Args:
             file_content: PDF file content
             filename: Original filename (for logging purposes)
             dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
+            batch_size: Number of pages to process in parallel batches
             
         Returns:
             Tuple of (optimized_images, total_pages)
         """
         try:
-            logger.info(f"Starting PDF processing: {filename}")
+            logger.info(f"Starting parallel PDF processing: {filename}")
             logger.info(f"File size: {len(file_content)} bytes")
+            logger.info(f"Batch size: {batch_size}")
             
             # Validate PDF
             is_valid, error_message, total_pages = await self.validate_pdf(file_content)
@@ -184,22 +262,62 @@ class PDFService:
             
             logger.info(f"PDF validation successful: {total_pages} pages")
             
-            # Extract pages as images in memory with high resolution
-            images = await self.extract_pages_as_images(file_content, dpi)
+            # Process pages in parallel batches
+            all_images = []
             
-            # Optimize images for AI processing while preserving text clarity
-            optimized_images = []
-            for i, image in enumerate(images):
-                logger.info(f"Optimizing page {i+1}/{len(images)}")
-                optimized_image = await self.optimize_image(image)
-                optimized_images.append(optimized_image)
+            for batch_start in range(1, total_pages + 1, batch_size):
+                batch_end = min(batch_start + batch_size - 1, total_pages)
+                logger.info(f"Processing batch: pages {batch_start} to {batch_end}")
+                
+                # Extract batch of pages
+                batch_images = await self.extract_pages_as_images(
+                    file_content, dpi, batch_start, batch_end
+                )
+                
+                # Optimize batch images in parallel
+                optimization_tasks = []
+                for image in batch_images:
+                    task = self.optimize_image(image)
+                    optimization_tasks.append(task)
+                
+                # Wait for all optimizations to complete
+                optimized_batch = await asyncio.gather(*optimization_tasks)
+                all_images.extend(optimized_batch)
+                
+                logger.info(f"Batch {batch_start}-{batch_end} completed: {len(optimized_batch)} images")
             
-            logger.info(f"PDF processing completed successfully: {len(optimized_images)} optimized images")
-            return optimized_images, total_pages
+            logger.info(f"Parallel PDF processing completed: {len(all_images)} optimized images")
+            return all_images, total_pages
             
         except Exception as e:
-            logger.error(f"PDF processing failed: {str(e)}")
+            logger.error(f"Parallel PDF processing failed: {str(e)}")
             raise e
+    
+    async def process_pdf(
+        self, 
+        file_content: bytes, 
+        filename: str,
+        dpi: int = None
+    ) -> Tuple[List[Image.Image], int]:
+        """
+        Process PDF file in memory: validate and extract pages as optimized images.
+        Uses parallel processing for better performance.
+        
+        Args:
+            file_content: PDF file content
+            filename: Original filename (for logging purposes)
+            dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
+            
+        Returns:
+            Tuple of (optimized_images, total_pages)
+        """
+        # Use parallel processing for better performance
+        return await self.process_pdf_parallel(file_content, filename, dpi)
+    
+    def __del__(self):
+        """Cleanup thread pool on deletion."""
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
 
 
 # Global PDF service instance
