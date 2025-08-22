@@ -1,9 +1,9 @@
 [project]
 name = "buscador-marca-backend"
 version = "0.1.0"
-description = "Backend for Document Brand Detection System"
+description = "Document Brand Detection System Backend with OCR and LLM Integration"
 authors = [
-    {name = "Development Team", email = "dev@hergonsa.pe"}
+    {name = "Your Name", email = "your.email@example.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,8 +24,14 @@ dependencies = [
     "aiofiles>=23.2.0",
     "httpx>=0.25.0",
     "easyocr>=1.7.0",
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    # CUDA-enabled PyTorch for Windows GPU
+    "torch>=2.0.0+cu118",
+    "torchvision>=0.15.0+cu118",
+    "torchaudio>=2.0.0+cu118",
+    # Additional GPU optimizations
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
 ]
 
 [project.optional-dependencies]
@@ -35,15 +41,22 @@ dev = [
     "black>=23.0.0",
     "isort>=5.12.0",
     "flake8>=6.0.0",
-    "mypy>=1.7.0",
+    "mypy>=1.5.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["app"]
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+]
 
 [tool.black]
 line-length = 88
