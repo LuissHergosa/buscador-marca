@@ -3,7 +3,7 @@ services:
     build: ./backend
     container_name: buscador-marca-backend
     ports:
-      - "8000:8000"
+      - "0.0.0.0:8000:8000"
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
@@ -35,7 +35,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 10s
     restart: unless-stopped
     command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--limit-concurrency", "1000", "--limit-max-requests", "10000", "--timeout-keep-alive", "300", "--timeout-graceful-shutdown", "300"]
 
@@ -43,19 +43,14 @@ services:
     build: ./frontend
     container_name: buscador-marca-frontend
     ports:
-      - "3000:80"
+      - "0.0.0.0:80:80"
     environment:
-      - VITE_API_URL=http://localhost:8000
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - NODE_ENV=production
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     networks:
       - buscador-marca-network
     restart: unless-stopped
-    command: ["bun", "run", "dev", "--host", "0.0.0.0", "--port", "80"]
 
 networks:
   buscador-marca-network:

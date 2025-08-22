@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { documentApi, processingApi } from '@/services/api';
 import { useDocumentListStore, useProcessingStatusStore } from '@/store';
-import { BrandReviewUpdate } from '@/types';
 
 // Hook for fetching all documents
 export const useDocuments = () => {

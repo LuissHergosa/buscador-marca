@@ -14,7 +14,7 @@ const DocumentDetail: React.FC<DocumentDetailProps> = ({ document, onBack }) => 
 
   // Fetch document results from API
   const { data: documentWithResults, isLoading: loadingResults } = useDocumentResults(document.id);
-  const { mutate: updateBrandReviewStatus, isPending: isUpdating } = useUpdateBrandReviewStatus();
+  const { mutate: updateBrandReviewStatus } = useUpdateBrandReviewStatus();
 
   // Get results from the API response
   const results = documentWithResults?.results || document.results || [];
@@ -23,7 +23,7 @@ const DocumentDetail: React.FC<DocumentDetailProps> = ({ document, onBack }) => 
   const elementosPorRevisar = results.flatMap((result: BrandDetection) =>
     result.brands_detected
       .filter((brand: string) => !result.brands_review_status[brand])
-      .map((brand: string, index: number) => ({
+      .map((brand: string) => ({
         id: `${result.page_number}-${brand}`,
         nombre: brand,
         pagina: result.page_number,
@@ -35,7 +35,7 @@ const DocumentDetail: React.FC<DocumentDetailProps> = ({ document, onBack }) => 
   const elementosRevisados = results.flatMap((result: BrandDetection) =>
     result.brands_detected
       .filter((brand: string) => result.brands_review_status[brand])
-      .map((brand: string, index: number) => ({
+      .map((brand: string) => ({
         id: `${result.page_number}-${brand}`,
         nombre: brand,
         pagina: result.page_number,

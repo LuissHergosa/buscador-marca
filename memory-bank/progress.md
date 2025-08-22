@@ -162,6 +162,9 @@
 - Higher resolution processing may increase processing time per page
 - AI API rate limits may be reached faster with enhanced processing
 
+## Recently Resolved Issues
+- **500 Internal Server Errors during brand detection**: Fixed by implementing retry logic, exponential backoff, and improved error handling in Firebase service operations. The issue was caused by resource contention during intensive AI processing blocking Firebase connections.
+
 ## Lessons Learned
 - Memory bank structure provides excellent project context
 - Clear separation of concerns between backend, frontend, and infrastructure

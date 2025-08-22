@@ -1,9 +1,20 @@
 import axios from 'axios';
 import { Document, ProcessingStatus, BrandReviewUpdate } from '@/types';
 
+// Function to get the base URL dynamically
+const getBaseURL = () => {
+  // If VITE_API_URL is set, use it
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  
+  // Use relative URLs - nginx will proxy /api/ requests to the backend
+  return '';
+};
+
 // Create axios instance
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  baseURL: getBaseURL(),
   timeout: 300000,
   headers: {
     'Content-Type': 'application/json',
