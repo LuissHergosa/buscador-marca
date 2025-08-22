@@ -8,6 +8,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    poppler-utils \
+    libpoppler-cpp-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV package manager
@@ -18,9 +21,6 @@ COPY pyproject.toml README.md ./
 
 # Install dependencies using UV
 RUN uv sync
-
-# Copy application code
-COPY app/ ./app/
 
 # Create uploads directory
 RUN mkdir -p uploads
@@ -36,5 +36,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application with reload for development and increased limits for heavy files
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--limit-concurrency", "1000", "--limit-max-requests", "10000", "--timeout-keep-alive", "300", "--timeout-graceful-shutdown", "300"]

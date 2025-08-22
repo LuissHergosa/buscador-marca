@@ -2,6 +2,7 @@
 Document management API endpoints.
 """
 
+import logging
 import os
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
@@ -10,30 +11,42 @@ import io
 
 from ..models.document import Document, DocumentCreate, DocumentUpdate
 from ..models.processing_status import ProcessingStatus
+from ..models.brand_detection import BrandReviewUpdate
 from ..services.processing_service import processing_service
 from ..services.firebase_service import firebase_service
 from ..config import settings
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 def validate_file_size(file_size: int) -> None:
     """Validate file size."""
-    if file_size > settings.max_file_size:
+    logger.info(f"Validating file size: {file_size} bytes")
+    # Skip validation if max_file_size is 0 (no limit)
+    if settings.max_file_size > 0 and file_size > settings.max_file_size:
+        logger.error(f"File too large: {file_size} bytes > {settings.max_file_size} bytes")
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Maximum size is {settings.max_file_size // (1024*1024)}MB"
         )
+    logger.info("File size validation passed")
 
 
 def validate_file_extension(filename: str) -> None:
     """Validate file extension."""
+    logger.info(f"Validating file extension: {filename}")
     file_ext = os.path.splitext(filename)[1].lower()
     if file_ext not in settings.allowed_extensions:
+        logger.error(f"Invalid file extension: {file_ext}")
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file type. Allowed types: {', '.join(settings.allowed_extensions)}"
         )
+    logger.info(f"File extension validation passed: {file_ext}")
 
 
 @router.post("/upload", response_model=Document)
@@ -50,23 +63,37 @@ async def upload_document(
         Document object with processing status
     """
     try:
+        logger.info(f"Starting file upload: {file.filename}")
+        logger.info(f"File size: {file.size} bytes")
+        logger.info(f"Content type: {file.content_type}")
+        
         # Validate file
+        logger.info("Validating file extension")
         validate_file_extension(file.filename)
         
         # Read file content
+        logger.info("Reading file content")
         file_content = await file.read()
+        logger.info(f"File content read: {len(file_content)} bytes")
+        
+        # Validate file size
+        logger.info("Validating file size")
         validate_file_size(len(file_content))
         
         # Process document
+        logger.info("Starting document processing")
         document = await processing_service.process_document(
             file_content, file.filename
         )
         
+        logger.info(f"Document upload completed successfully: {document.id}")
         return document
         
     except HTTPException:
+        logger.error("HTTP exception during upload")
         raise
     except Exception as e:
+        logger.error(f"Upload failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
@@ -202,6 +229,48 @@ async def get_document_results(document_id: str) -> dict:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get results: {str(e)}")
+
+
+@router.post("/{document_id}/brands/review")
+async def update_brand_review_status(
+    document_id: str,
+    review_update: BrandReviewUpdate
+) -> dict:
+    """
+    Update the review status of a detected brand.
+    
+    Args:
+        document_id: Document ID
+        review_update: Brand review update data
+        
+    Returns:
+        Success message
+    """
+    try:
+        # Validate that the document exists
+        document = await firebase_service.get_document(document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Update the brand review status
+        success = await firebase_service.update_brand_review_status(
+            document_id=document_id,
+            page_number=review_update.page_number,
+            brand_name=review_update.brand_name,
+            is_reviewed=review_update.is_reviewed
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Brand not found in document")
+        
+        return {
+            "message": f"Brand '{review_update.brand_name}' review status updated successfully",
+            "is_reviewed": review_update.is_reviewed
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update brand review status: {str(e)}")
 
 
 @router.get("/active/processes")

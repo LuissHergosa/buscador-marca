@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { ArrowLeft, CheckCircle, Eye } from 'lucide-react';
+import { CheckCircle, Eye, FileText, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Document } from '@/types';
+import { Document, BrandDetection } from '@/types';
+import { useDocumentResults, useUpdateBrandReviewStatus } from '@/hooks/useDocuments';
 
 interface DocumentDetailProps {
   document: Document;
@@ -10,193 +11,214 @@ interface DocumentDetailProps {
 
 const DocumentDetail: React.FC<DocumentDetailProps> = ({ document, onBack }) => {
   const [activeTab, setActiveTab] = useState('por-revisar');
-  
-  // Fetch document results
-  // const { data: results, isLoading: loadingResults } = useDocumentResults(document.id);
 
-  // Mock data for elements - in real implementation, this would come from the API
-  const [elementosPorRevisar, setElementosPorRevisar] = useState([
-    { id: 1, nombre: '[elemento marca A]', pagina: 'página 1' },
-    { id: 2, nombre: '[elemento marca B]', pagina: 'página 3' },
-    { id: 3, nombre: '[elemento marca C]', pagina: 'página 5' },
-  ]);
-  const [elementosRevisados, setElementosRevisados] = useState([
-    { id: 4, nombre: '[elemento marca D]', pagina: 'página 2' },
-    { id: 5, nombre: '[elemento marca E]', pagina: 'página 4' },
-  ]);
+  // Fetch document results from API
+  const { data: documentWithResults, isLoading: loadingResults } = useDocumentResults(document.id);
+  const { mutate: updateBrandReviewStatus, isPending: isUpdating } = useUpdateBrandReviewStatus();
 
-  const moverARevisado = (elemento: any) => {
-    // Remover de por revisar
-    setElementosPorRevisar(prev => prev.filter(el => el.id !== elemento.id));
-    // Agregar a revisados
-    setElementosRevisados(prev => [...prev, elemento]);
+  // Get results from the API response
+  const results = documentWithResults?.results || document.results || [];
+
+  // Separate results into por revisar (not reviewed) and revisado (reviewed)
+  const elementosPorRevisar = results.flatMap((result: BrandDetection) =>
+    result.brands_detected
+      .filter((brand: string) => !result.brands_review_status[brand])
+      .map((brand: string, index: number) => ({
+        id: `${result.page_number}-${brand}`,
+        nombre: brand,
+        pagina: result.page_number,
+        pageNumber: result.page_number,
+        brandName: brand
+      }))
+  );
+
+  const elementosRevisados = results.flatMap((result: BrandDetection) =>
+    result.brands_detected
+      .filter((brand: string) => result.brands_review_status[brand])
+      .map((brand: string, index: number) => ({
+        id: `${result.page_number}-${brand}`,
+        nombre: brand,
+        pagina: result.page_number,
+        pageNumber: result.page_number,
+        brandName: brand
+      }))
+  );
+
+  const handleToggleReviewStatus = (elemento: any, newStatus: boolean) => {
+    updateBrandReviewStatus({
+      document_id: document.id,
+      page_number: elemento.pageNumber,
+      brand_name: elemento.brandName,
+      is_reviewed: newStatus
+    });
   };
 
-  const moverAPorRevisar = (elemento: any) => {
-    // Remover de revisados
-    setElementosRevisados(prev => prev.filter(el => el.id !== elemento.id));
-    // Agregar a por revisar
-    setElementosPorRevisar(prev => [...prev, elemento]);
-  };
-
-  const toggleRevisado = () => {
-    // This would update the document status in the backend
-    console.log('Marcar como revisado:', document.id);
-  };
+  // Loading state
+  if (loadingResults) {
+    return (
+      <div className="text-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600 text-lg">Cargando análisis del documento...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <Button 
-          variant="ghost" 
-          onClick={onBack} 
-          className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Volver a Documentos
-        </Button>
-        
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold text-gray-900">{document.filename}</h1>
-          <p className="text-gray-600">
-            Subido el {new Date(document.upload_date).toLocaleDateString()}
-          </p>
+      {/* Document Header */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <FileText className="w-8 h-8 text-blue-600" />
+              <h2 className="text-2xl font-bold text-gray-900">{document.filename}</h2>
+            </div>
+            <div className="flex items-center gap-6 text-sm text-gray-600">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" />
+                <span>Subido el {new Date(document.upload_date).toLocaleDateString()}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4" />
+                <span>{document.total_pages} páginas</span>
+              </div>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-sm text-gray-500 mb-1">Estado del documento</div>
+            <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${document.status === 'completed'
+              ? 'bg-green-100 text-green-800'
+              : document.status === 'processing'
+                ? 'bg-blue-100 text-blue-800'
+                : 'bg-gray-100 text-gray-800'
+              }`}>
+              {document.status === 'completed' ? 'Completado' :
+                document.status === 'processing' ? 'Procesando' :
+                  document.status}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Analysis Modal Content */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
+      {/* Analysis Results */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
         {/* Tabs */}
-        <div className="flex border-b border-gray-200 mb-6">
+        <div className="flex border-b border-gray-200">
           <button
             onClick={() => setActiveTab('por-revisar')}
-            className={`px-6 py-3 font-medium transition-colors ${
-              activeTab === 'por-revisar'
-                ? 'border-b-2 border-blue-500 text-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
+            className={`flex-1 px-6 py-4 font-medium transition-colors relative ${activeTab === 'por-revisar'
+              ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
           >
-            Por Revisar
+            <div className="flex items-center justify-center gap-2">
+              <Eye className="w-5 h-5" />
+              <span>Por Revisar</span>
+              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded-full">
+                {elementosPorRevisar.length}
+              </span>
+            </div>
           </button>
           <button
             onClick={() => setActiveTab('revisado')}
-            className={`px-6 py-3 font-medium transition-colors ${
-              activeTab === 'revisado'
-                ? 'border-b-2 border-green-500 text-green-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
+            className={`flex-1 px-6 py-4 font-medium transition-colors relative ${activeTab === 'revisado'
+              ? 'text-green-600 border-b-2 border-green-600 bg-green-50'
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
           >
-            Revisado
+            <div className="flex items-center justify-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              <span>Revisado</span>
+              <span className="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded-full">
+                {elementosRevisados.length}
+              </span>
+            </div>
           </button>
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'por-revisar' && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-blue-700 mb-4">ELEMENTOS POR REVISAR</h3>
-            
+        <div className="p-6">
+          {activeTab === 'por-revisar' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-orange-600 font-medium">Nombre</span>
-                <span className="text-blue-600 font-medium">Tipo documento</span>
-              </div>
-              
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-orange-600 font-medium">Especialidad</span>
-                <span className="text-gray-600">Nombre del archivo</span>
-              </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 bg-white rounded text-sm border border-blue-200">
-                  <span className="text-blue-600 font-medium">por revisar</span>
-                  <span className="text-gray-500">click para revisar</span>
+              {elementosPorRevisar.length === 0 ? (
+                <div className="text-center py-12">
+                  <CheckCircle className="w-16 h-16 mx-auto mb-4 text-green-400" />
+                  <h4 className="text-lg font-medium text-gray-900 mb-2">¡Excelente trabajo!</h4>
+                  <p className="text-gray-500">Todas las marcas han sido revisadas</p>
                 </div>
-                
-                {elementosPorRevisar.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <CheckCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                    <p>No hay elementos por revisar</p>
-                  </div>
-                ) : (
-                  elementosPorRevisar.map((elemento) => (
-                    <div 
+              ) : (
+                <div className="grid gap-3">
+                  {elementosPorRevisar.map((elemento) => (
+                    <div
                       key={elemento.id}
-                      onClick={() => moverARevisado(elemento)}
-                      className="flex items-center p-2 bg-white rounded hover:bg-blue-50 transition-colors cursor-pointer group border border-blue-200"
+                      onClick={() => handleToggleReviewStatus(elemento, true)}
+                      className="flex items-center justify-between p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer group"
+                      title="Click para marcar como revisado"
                     >
-                      <div className="w-4 h-4 border-2 border-blue-500 rounded mr-3 group-hover:bg-blue-500 transition-colors"></div>
-                      <span className="text-blue-600 text-sm">{elemento.nombre}</span>
-                      <span className="text-gray-500 ml-auto text-sm">{elemento.pagina}</span>
-                      <div className="w-4 h-4 bg-gray-300 rounded ml-2 group-hover:bg-blue-400 transition-colors"></div>
+                      <div className="flex items-center gap-4">
+                        <div>
+                          <div className="font-medium text-gray-900">{elemento.nombre}</div>
+                          <div className="text-sm text-gray-500">Página {elemento.pagina}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-blue-600">
+                        <span className="text-sm font-medium">Marcar como revisado</span>
+                        <CheckCircle className="w-5 h-5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
                     </div>
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          )}
 
-        {activeTab === 'revisado' && (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-green-700 mb-4">ELEMENTOS REVISADOS</h3>
-            
+          {activeTab === 'revisado' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-orange-600 font-medium">Nombre</span>
-                <span className="text-green-600 font-medium">Tipo documento</span>
-              </div>
-              
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-orange-600 font-medium">Especialidad</span>
-                <span className="text-gray-600">Nombre del archivo</span>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 bg-white rounded text-sm border border-green-200">
-                  <span className="text-green-600 font-medium">revisado</span>
-                  <span className="text-gray-500">click para deshacer</span>
+              {elementosRevisados.length === 0 ? (
+                <div className="text-center py-12">
+                  <Eye className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+                  <h4 className="text-lg font-medium text-gray-900 mb-2">Sin marcas revisadas</h4>
+                  <p className="text-gray-500">Las marcas revisadas aparecerán aquí</p>
                 </div>
-                
-                {elementosRevisados.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <Eye className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                    <p>No hay elementos revisados</p>
-                  </div>
-                ) : (
-                  elementosRevisados.map((elemento) => (
-                    <div 
+              ) : (
+                <div className="grid gap-3">
+                  {elementosRevisados.map((elemento) => (
+                    <div
                       key={elemento.id}
-                      onClick={() => moverAPorRevisar(elemento)}
-                      className="flex items-center p-2 bg-white rounded hover:bg-green-50 transition-colors cursor-pointer group border border-green-200"
+                      onClick={() => handleToggleReviewStatus(elemento, false)}
+                      className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors cursor-pointer group"
+                      title="Click para marcar como no revisado"
                     >
-                      <CheckCircle className="w-4 h-4 text-green-600 mr-3 group-hover:text-green-500 transition-colors" />
-                      <span className="text-green-600 text-sm group-hover:text-green-500 transition-colors">{elemento.nombre}</span>
-                      <span className="text-gray-500 ml-auto text-sm">{elemento.pagina}</span>
-                      <CheckCircle className="w-4 h-4 text-green-600 ml-2 group-hover:text-green-500 transition-colors" />
+                      <div className="flex items-center gap-4">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <div>
+                          <div className="font-medium text-gray-900">{elemento.nombre}</div>
+                          <div className="text-sm text-gray-500">Página {elemento.pagina}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-green-600">
+                        <span className="text-sm font-medium">Click para deshacer</span>
+                        <Eye className="w-5 h-5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
                     </div>
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
-
-        <div className="mt-6 flex gap-4 justify-end">
-          <Button
-            onClick={toggleRevisado}
-            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded transition-colors"
-          >
-            Marcar como revisado
-          </Button>
-          <Button
-            variant="outline"
-            onClick={onBack}
-            className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-6 py-2 rounded transition-colors"
-          >
-            Cerrar
-          </Button>
+          )}
         </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex justify-end gap-3">
+        <Button
+          variant="outline"
+          onClick={onBack}
+          className="px-6 py-2"
+        >
+          Cerrar
+        </Button>
       </div>
     </div>
   );

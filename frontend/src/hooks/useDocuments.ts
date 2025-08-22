@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { documentApi, processingApi } from '@/services/api';
 import { useDocumentListStore, useProcessingStatusStore } from '@/store';
+import { BrandReviewUpdate } from '@/types';
 
 // Hook for fetching all documents
 export const useDocuments = () => {
@@ -89,6 +90,20 @@ export const useCancelProcessing = () => {
     mutationFn: documentApi.cancelProcessing,
     onSuccess: (_, id) => {
       updateDocument(id, { status: 'cancelled' });
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    },
+  });
+};
+
+// Hook for updating brand review status
+export const useUpdateBrandReviewStatus = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: documentApi.updateBrandReviewStatus,
+    onSuccess: (_, reviewUpdate) => {
+      // Invalidate queries to refresh the data
+      queryClient.invalidateQueries({ queryKey: ['document-results', reviewUpdate.document_id] });
       queryClient.invalidateQueries({ queryKey: ['documents'] });
     },
   });

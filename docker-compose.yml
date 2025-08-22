@@ -15,11 +15,18 @@ services:
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT}
-      - DEBUG=false
+      - LANGSMITH_TRACING_V2=true
+      - DEBUG=true
       - HOST=0.0.0.0
       - PORT=8000
-      - MAX_CONRCURRENT_PAGES=5
+      - MAX_FILE_SIZE=0
+      - MAX_CONCURRENT_PAGES=10
+      - PROCESSING_TIMEOUT=0
+      - PDF_DPI=600
+      - MAX_IMAGE_SIZE=8192
+      - IMAGE_QUALITY=95
     volumes:
+      - ./backend:/app
       - ./backend/uploads:/app/uploads
     networks:
       - buscador-marca-network
@@ -30,6 +37,7 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--limit-concurrency", "1000", "--limit-max-requests", "10000", "--timeout-keep-alive", "300", "--timeout-graceful-shutdown", "300"]
 
   frontend:
     build: ./frontend
@@ -38,12 +46,16 @@ services:
       - "3000:80"
     environment:
       - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       backend:
         condition: service_healthy
     networks:
       - buscador-marca-network
     restart: unless-stopped
+    command: ["bun", "run", "dev", "--host", "0.0.0.0", "--port", "80"]
 
 networks:
   buscador-marca-network:

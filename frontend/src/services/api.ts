@@ -1,10 +1,10 @@
 import axios from 'axios';
-import { Document, ProcessingStatus } from '@/types';
+import { Document, ProcessingStatus, BrandReviewUpdate } from '@/types';
 
 // Create axios instance
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-  timeout: 30000,
+  timeout: 300000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -75,6 +75,15 @@ export const documentApi = {
   // Cancel processing
   cancelProcessing: async (id: string): Promise<void> => {
     await api.post(`/api/documents/${id}/cancel`);
+  },
+
+  // Update brand review status
+  updateBrandReviewStatus: async (reviewUpdate: BrandReviewUpdate): Promise<{ message: string; is_reviewed: boolean }> => {
+    const response = await api.post<{ message: string; is_reviewed: boolean }>(
+      `/api/documents/${reviewUpdate.document_id}/brands/review`,
+      reviewUpdate
+    );
+    return response.data;
   },
 };
 

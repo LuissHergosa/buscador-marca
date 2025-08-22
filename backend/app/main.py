@@ -31,9 +31,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
-    # Include routers
+    # Include routers with increased request body limits for heavy files
     app.include_router(health_router)
-    app.include_router(documents_router)
+    app.include_router(
+        documents_router,
+        # Increase request body limit for heavy PDF files
+        dependencies=[]
+    )
     
     # Global exception handler
     @app.exception_handler(Exception)
@@ -66,5 +70,10 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
-        log_level="info"
+        log_level="info",
+        # Increase limits for heavy file processing
+        limit_concurrency=1000,
+        limit_max_requests=10000,
+        timeout_keep_alive=300,
+        timeout_graceful_shutdown=300
     )

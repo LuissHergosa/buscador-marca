@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", env="HOST")
     port: int = Field(default=8000, env="PORT")
     
-    # File Upload
-    max_file_size: int = Field(default=50 * 1024 * 1024, env="MAX_FILE_SIZE")  # 50MB
+    # File Upload - No limits for heavy files
+    max_file_size: int = Field(default=0, env="MAX_FILE_SIZE")  # 0 = no limit
     upload_dir: str = Field(default="./uploads", env="UPLOAD_DIR")
     allowed_extensions: list[str] = Field(default=[".pdf"], env="ALLOWED_EXTENSIONS")
     
@@ -43,9 +43,20 @@ class Settings(BaseSettings):
     )
     firebase_client_x509_cert_url: Optional[str] = Field(default=None, env="FIREBASE_CLIENT_X509_CERT_URL")
     
-    # Processing
-    max_concurrent_pages: int = Field(default=5, env="MAX_CONCURRENT_PAGES")
-    processing_timeout: int = Field(default=300, env="PROCESSING_TIMEOUT")  # 5 minutes
+    # Processing - No limits for heavy processing
+    max_concurrent_pages: int = Field(default=10, env="MAX_CONCURRENT_PAGES")  # Increased for heavy files
+    processing_timeout: int = Field(default=0, env="PROCESSING_TIMEOUT")  # 0 = no timeout
+
+    # Image Processing
+    pdf_dpi: int = Field(default=600, env="PDF_DPI")  # High resolution for better text detection
+    max_image_size: int = Field(default=8192, env="MAX_IMAGE_SIZE")  # Increased for better resolution
+    image_quality: int = Field(default=95, env="IMAGE_QUALITY")  # PNG quality for better text clarity
+    
+    # LangChain
+    langchain_tracing_v2: Optional[str] = Field(default=None, env="LANGSMITH_API_KEY")
+    langchain_api_key: Optional[str] = Field(default=None, env="LANGSMITH_API_KEY")
+    langchain_project: Optional[str] = Field(default=None, env="LANGCHAIN_PROJECT")
+    langsmith_endpoint: Optional[str] = Field(default=None, env="LANGSMITH_ENDPOINT")
     
     class Config:
         env_file = ".env"

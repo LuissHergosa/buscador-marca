@@ -19,11 +19,19 @@ export interface BrandDetection {
   brands_detected: string[];
   processing_time: number;
   status: 'pending' | 'processing' | 'completed' | 'failed';
+  brands_review_status: Record<string, boolean>;
 }
 
 export interface BrandDetectionCreate {
   page_number: number;
   brands_detected: string[];
+}
+
+export interface BrandReviewUpdate {
+  document_id: string;
+  page_number: number;
+  brand_name: string;
+  is_reviewed: boolean;
 }
 
 // Processing status types

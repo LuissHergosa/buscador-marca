@@ -100,7 +100,22 @@ class FirebaseService:
             if "results" in doc_data:
                 for page_num, result_data in doc_data["results"].items():
                     if isinstance(result_data, dict):
-                        results.append(BrandDetection(**result_data))
+                        # Handle both successful and failed results
+                        if "error_message" in result_data:
+                            # This is a failed result, create with default values
+                            results.append(BrandDetection(
+                                page_number=int(page_num),
+                                brands_detected=[],
+                                processing_time=0.0,
+                                status=result_data.get("status", "failed"),
+                                brands_review_status={}
+                            ))
+                        else:
+                            # This is a successful result
+                            # Ensure brands_review_status exists
+                            if "brands_review_status" not in result_data:
+                                result_data["brands_review_status"] = {}
+                            results.append(BrandDetection(**result_data))
             
             return Document(
                 id=doc_data["id"],
@@ -127,7 +142,22 @@ class FirebaseService:
                 if "results" in doc_data:
                     for page_num, result_data in doc_data["results"].items():
                         if isinstance(result_data, dict):
-                            results.append(BrandDetection(**result_data))
+                            # Handle both successful and failed results
+                            if "error_message" in result_data:
+                                # This is a failed result, create with default values
+                                results.append(BrandDetection(
+                                    page_number=int(page_num),
+                                    brands_detected=[],
+                                    processing_time=0.0,
+                                    status=result_data.get("status", "failed"),
+                                    brands_review_status={}
+                                ))
+                            else:
+                                # This is a successful result
+                                # Ensure brands_review_status exists
+                                if "brands_review_status" not in result_data:
+                                    result_data["brands_review_status"] = {}
+                                results.append(BrandDetection(**result_data))
                 
                 documents.append(Document(
                     id=doc_data["id"],
@@ -186,12 +216,18 @@ class FirebaseService:
         try:
             doc_ref = self.documents_collection.document(document_id)
             
+            # Initialize brands_review_status for each detected brand
+            brands_review_status = {}
+            for brand in result.brands_detected:
+                brands_review_status[brand] = False  # Default to not reviewed
+            
             # Create result data
             result_data = {
                 "page_number": result.page_number,
                 "brands_detected": result.brands_detected,
                 "processing_time": processing_time,
-                "status": "completed"
+                "status": "completed",
+                "brands_review_status": brands_review_status
             }
             
             # Update the results subcollection
@@ -203,7 +239,8 @@ class FirebaseService:
                 page_number=result.page_number,
                 brands_detected=result.brands_detected,
                 processing_time=processing_time,
-                status="completed"
+                status="completed",
+                brands_review_status=brands_review_status
             )
         except FirebaseError as e:
             raise Exception(f"Failed to save brand detection result: {str(e)}")
@@ -272,6 +309,49 @@ class FirebaseService:
             )
         except FirebaseError as e:
             raise Exception(f"Failed to get processing status: {str(e)}")
+
+    async def update_brand_review_status(
+        self, 
+        document_id: str, 
+        page_number: int, 
+        brand_name: str, 
+        is_reviewed: bool
+    ) -> bool:
+        """Update the review status of a detected brand."""
+        try:
+            doc_ref = self.documents_collection.document(document_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return False
+            
+            doc_data = doc.to_dict()
+            
+            # Check if the page exists in results
+            if "results" not in doc_data or str(page_number) not in doc_data["results"]:
+                return False
+            
+            page_result = doc_data["results"][str(page_number)]
+            
+            # Check if the brand exists in the detected brands
+            if "brands_detected" not in page_result or brand_name not in page_result["brands_detected"]:
+                return False
+            
+            # Initialize brands_review_status if it doesn't exist
+            if "brands_review_status" not in page_result:
+                page_result["brands_review_status"] = {}
+            
+            # Update the review status
+            page_result["brands_review_status"][brand_name] = is_reviewed
+            
+            # Update the document in Firestore
+            doc_ref.update({
+                f"results.{page_number}": page_result
+            })
+            
+            return True
+        except FirebaseError as e:
+            raise Exception(f"Failed to update brand review status: {str(e)}")
 
 
 # Global Firebase service instance

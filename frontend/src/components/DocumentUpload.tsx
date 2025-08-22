@@ -100,12 +100,12 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onSuccess }) => {
   return (
     <div className="space-y-6 max-w-md mx-auto">
       <div>
-        <label className="block text-sm font-medium mb-2 text-gray-900">Nombre del documento</label>
+        <label className="block text-sm font-medium mb-2 text-gray-900">Nombre del análisis</label>
         <Input
           type="text"
           value={newDoc.nombre}
           onChange={(e) => handleInputChange('nombre', e.target.value)}
-          placeholder="Se completará automáticamente al subir archivo"
+          placeholder=""
           className="bg-white border border-gray-300"
         />
       </div>
