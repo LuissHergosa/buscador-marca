@@ -51,9 +51,9 @@ class BrandDetectionService:
         # Create semaphore for rate limiting
         self.semaphore = asyncio.Semaphore(settings.max_concurrent_pages)
         
-        # Chunk analysis configuration
-        self.chunk_size = (1024, 1024)  # 1024x1024 pixels per chunk
-        self.chunk_overlap = 200  # 200 pixels overlap between chunks
+        # Chunk analysis configuration - 6 chunks total
+        self.num_chunks = 6  # Fixed number of chunks
+        self.chunk_overlap = 100  # 100 pixels overlap between chunks for better coverage
     
     def _encode_image_to_base64(self, image) -> str:
         """
@@ -93,7 +93,8 @@ class BrandDetectionService:
     
     def _split_image_into_chunks(self, image: Image.Image) -> List[Tuple[Image.Image, Tuple[int, int]]]:
         """
-        Split image into overlapping chunks for detailed analysis.
+        Split image into exactly 6 chunks for detailed analysis.
+        Uses a 2x3 grid layout to ensure uniform distribution.
         
         Args:
             image: PIL Image object
@@ -103,60 +104,90 @@ class BrandDetectionService:
         """
         try:
             width, height = image.size
-            chunk_width, chunk_height = self.chunk_size
             overlap = self.chunk_overlap
             
+            # Calculate chunk dimensions for 2x3 grid (6 chunks total)
+            # 2 rows, 3 columns
+            chunk_width = width // 3
+            chunk_height = height // 2
+            
+            # Ensure minimum chunk size
+            min_chunk_size = 300
+            if chunk_width < min_chunk_size or chunk_height < min_chunk_size:
+                logger.warning(f"Image too small for 6 chunks, using 4 chunks instead")
+                # Fallback to 2x2 grid for small images
+                chunk_width = width // 2
+                chunk_height = height // 2
+                grid_cols, grid_rows = 2, 2
+            else:
+                grid_cols, grid_rows = 3, 2
+            
             chunks = []
+            chunk_index = 0
             
-            # Calculate step sizes
-            step_x = chunk_width - overlap
-            step_y = chunk_height - overlap
-            
-            # Generate chunks
-            for y in range(0, height, step_y):
-                for x in range(0, width, step_x):
-                    # Calculate chunk boundaries
-                    left = x
-                    top = y
-                    right = min(x + chunk_width, width)
-                    bottom = min(y + chunk_height, height)
+            for row in range(grid_rows):
+                for col in range(grid_cols):
+                    # Calculate chunk boundaries with overlap
+                    left = max(0, col * chunk_width - overlap)
+                    top = max(0, row * chunk_height - overlap)
+                    right = min(width, (col + 1) * chunk_width + overlap)
+                    bottom = min(height, (row + 1) * chunk_height + overlap)
                     
                     # Extract chunk
                     chunk = image.crop((left, top, right, bottom))
                     
-                    # Only add chunks that are large enough to be meaningful
-                    if chunk.size[0] >= 200 and chunk.size[1] >= 200:
-                        chunks.append((chunk, (x, y)))
+                    # Store chunk with its position and index
+                    chunks.append((chunk, (left, top, chunk_index)))
+                    chunk_index += 1
             
-            logger.info(f"Split image into {len(chunks)} chunks for analysis")
+            logger.info(f"Split image into {len(chunks)} chunks ({grid_cols}x{grid_rows} grid) for analysis")
+            logger.info(f"Chunk dimensions: {chunk_width}x{chunk_height} pixels")
+            logger.info(f"Image dimensions: {width}x{height} pixels")
+            
             return chunks
             
         except Exception as e:
             logger.error(f"Failed to split image into chunks: {str(e)}")
             raise Exception(f"Failed to split image into chunks: {str(e)}")
     
-    def _create_chunk_prompt(self, page_number: int, chunk_position: Tuple[int, int], total_chunks: int) -> str:
+    def _create_chunk_prompt(self, page_number: int, chunk_position: Tuple[int, int, int], total_chunks: int) -> str:
         """
         Create optimized prompt for brand detection in a specific chunk.
         
         Args:
             page_number: Page number being analyzed
-            chunk_position: Position of the chunk (x, y)
+            chunk_position: Position of the chunk (x, y, index)
             total_chunks: Total number of chunks being analyzed
             
         Returns:
             Formatted prompt string for chunk analysis
         """
-        logger.info(f"Creating chunk analysis prompt for page {page_number}, chunk at {chunk_position}")
+        chunk_x, chunk_y, chunk_index = chunk_position
+        logger.info(f"Creating chunk analysis prompt for page {page_number}, chunk {chunk_index} at ({chunk_x}, {chunk_y})")
+        
+        # Determine chunk position description for better context
+        if total_chunks == 6:
+            # 2x3 grid layout
+            row = chunk_index // 3
+            col = chunk_index % 3
+            position_desc = f"fila {row + 1}, columna {col + 1}"
+        elif total_chunks == 4:
+            # 2x2 grid layout (fallback)
+            row = chunk_index // 2
+            col = chunk_index % 2
+            position_desc = f"fila {row + 1}, columna {col + 1}"
+        else:
+            position_desc = f"fragmento {chunk_index + 1}"
         
         return f"""
         Eres un experto analista especializado en detectar marcas comerciales en fragmentos de planos arquitectónicos. 
-        Analiza este fragmento específico de un plano arquitectónico (página {page_number}, fragmento {chunk_position[0]},{chunk_position[1]}) 
+        Analiza este fragmento específico de un plano arquitectónico (página {page_number}, {position_desc}) 
         y detecta TODAS las marcas comerciales mencionadas como texto.
 
         CONTEXTO DEL FRAGMENTO:
-        - Este es el fragmento {chunk_position[0]},{chunk_position[1]} de {total_chunks} fragmentos totales
-        - Posición en el plano: coordenadas ({chunk_position[0]}, {chunk_position[1]})
+        - Este es el {position_desc} de {total_chunks} fragmentos totales
+        - Índice del fragmento: {chunk_index + 1}
+        - Posición en el plano: coordenadas ({chunk_x}, {chunk_y})
         - Enfócate únicamente en el contenido visible en este fragmento específico
 
         METODOLOGÍA DE ANÁLISIS PARA FRAGMENTOS:
@@ -232,7 +263,8 @@ class BrandDetectionService:
                 "Nombre exacto de la marca 1",
                 "Nombre exacto de la marca 2"
             ],
-            "chunk_position": [{chunk_position[0]}, {chunk_position[1]}],
+            "chunk_position": [{chunk_x}, {chunk_y}],
+            "chunk_index": {chunk_index},
             "page_number": {page_number}
         }}
 
@@ -357,7 +389,7 @@ class BrandDetectionService:
     async def detect_brands_in_chunk(
         self, 
         chunk_image: Image.Image, 
-        chunk_position: Tuple[int, int],
+        chunk_position: Tuple[int, int, int],
         page_number: int,
         total_chunks: int
     ) -> List[str]:
@@ -376,7 +408,8 @@ class BrandDetectionService:
         async with self.semaphore:  # Rate limiting
             try:
                 start_time = time.time()
-                logger.info(f"Starting chunk analysis for page {page_number}, chunk at {chunk_position}")
+                chunk_x, chunk_y, chunk_index = chunk_position
+                logger.info(f"Starting chunk analysis for page {page_number}, chunk {chunk_index} at ({chunk_x}, {chunk_y})")
                 
                 # Encode chunk image to base64
                 base64_chunk = self._encode_image_to_base64(chunk_image)
@@ -402,16 +435,16 @@ class BrandDetectionService:
                 
                 # Get response from Gemini
                 try:
-                    response = await self.llm_instances[hash(chunk_position) % len(self.llm_instances)].ainvoke([message])
+                    response = await self.llm_instances[chunk_index % len(self.llm_instances)].ainvoke([message])
                     response_text = response.content
-                    logger.info(f"Received chunk response for page {page_number}, chunk {chunk_position}: {len(response_text)} characters")
+                    logger.info(f"Received chunk response for page {page_number}, chunk {chunk_index}: {len(response_text)} characters")
                 except Exception as e:
-                    logger.error(f"Error getting Gemini response for chunk {chunk_position}: {str(e)}")
+                    logger.error(f"Error getting Gemini response for chunk {chunk_index}: {str(e)}")
                     return []
                 
                 # Parse response
                 if not response_text or response_text.strip() == "":
-                    logger.info(f"Empty response for chunk {chunk_position} - no brands detected")
+                    logger.info(f"Empty response for chunk {chunk_index} - no brands detected")
                     return []
                 
                 # Extract JSON from response
@@ -420,7 +453,7 @@ class BrandDetectionService:
                     json_str = json_match.group()
                     result = json.loads(json_str)
                 else:
-                    logger.warning(f"No JSON pattern found in chunk response {chunk_position}, trying to parse entire response")
+                    logger.warning(f"No JSON pattern found in chunk response {chunk_index}, trying to parse entire response")
                     result = json.loads(response_text)
                 
                 # Validate and extract brands
@@ -438,21 +471,21 @@ class BrandDetectionService:
                         ]
                         
                         processing_time = time.time() - start_time
-                        logger.info(f"Chunk analysis completed for {chunk_position}: {len(brands)} brands found in {processing_time:.2f} seconds")
+                        logger.info(f"Chunk analysis completed for chunk {chunk_index}: {len(brands)} brands found in {processing_time:.2f} seconds")
                         
                         if brands:
-                            logger.info(f"Brands detected in chunk {chunk_position}: {brands}")
+                            logger.info(f"Brands detected in chunk {chunk_index}: {brands}")
                         
                         return brands
                 
-                logger.warning(f"Invalid response format for chunk {chunk_position}")
+                logger.warning(f"Invalid response format for chunk {chunk_index}")
                 return []
                 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse chunk response as JSON for {chunk_position}: {str(e)}")
+                logger.error(f"Failed to parse chunk response as JSON for chunk {chunk_index}: {str(e)}")
                 return []
             except Exception as e:
-                logger.error(f"Chunk analysis failed for {chunk_position}: {str(e)}")
+                logger.error(f"Chunk analysis failed for chunk {chunk_index}: {str(e)}")
                 return []
     
     async def detect_brands_in_image(
