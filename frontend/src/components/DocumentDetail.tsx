@@ -85,7 +85,6 @@ const DocumentDetail: React.FC<DocumentDetailProps> = ({ document, onBack }) => 
             </div>
           </div>
           <div className="text-right">
-            <div className="text-sm text-gray-500 mb-1">Estado del documento</div>
             <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${document.status === 'completed'
               ? 'bg-green-100 text-green-800'
               : document.status === 'processing'

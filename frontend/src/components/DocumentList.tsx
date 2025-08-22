@@ -117,7 +117,7 @@ const DocumentList: React.FC<DocumentListProps> = ({ onDocumentSelect, filters }
             </p>
             
             <p className="text-gray-500 text-xs mb-4">
-              <span className="font-medium">Resultados:</span> {document.results?.length || 0}
+              <span className="font-medium">Resultados:</span> {document.results?.reduce((total, result) => total + (result.brands_detected?.length || 0), 0) || 0}
             </p>
 
             {/* Processing Progress */}

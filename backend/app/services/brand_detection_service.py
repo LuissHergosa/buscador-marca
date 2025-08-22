@@ -98,6 +98,9 @@ class BrandDetectionService:
         5. **Incluir variaciones**: Si una marca aparece con diferentes variaciones (ej: "Samsung" y "SAMSUNG"), incluye ambas
         6. **No descripciones**: Solo nombres de marcas, no descripciones genéricas de productos
 
+        MARCAS EXCLUIDAS (NO DETECTAR):
+        - Hergon y todas sus variantes (Grupo Hergon SA, Hergon SA, etc.)
+
         TIPOS DE MARCAS A BUSCAR EN TEXTO:
         - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, etc.)
         - Materiales de construcción (Cemex, Holcim, Cementos Argos, etc.)
@@ -114,6 +117,7 @@ class BrandDetectionService:
         - Lee TODO el texto visible en el plano
         - Busca en especificaciones, notas, leyendas y cualquier área con texto
         - Las marcas pueden aparecer en cualquier parte del plano como texto
+        - EXCLUYE específicamente cualquier variante de "Hergon"
         - Si no encuentras marcas, responde con una lista vacía
         - Responde SOLO con un JSON válido
 
@@ -217,6 +221,13 @@ class BrandDetectionService:
             brands_detected = [
                 brand.strip() for brand in brands_detected 
                 if brand and brand.strip()
+            ]
+            
+            # Filter out Hergon and its variants
+            excluded_brands = ['hergon', 'grupo hergon', 'hergon sa', 'grupo hergon sa']
+            brands_detected = [
+                brand for brand in brands_detected
+                if not any(excluded.lower() in brand.lower() for excluded in excluded_brands)
             ]
             
             # Calculate processing time
