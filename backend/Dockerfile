@@ -4,13 +4,30 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for EasyOCR and other requirements
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     poppler-utils \
     libpoppler-cpp-dev \
     pkg-config \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgthread-2.0-0 \
+    libfontconfig1 \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libv4l-dev \
+    libxvidcore-dev \
+    libx264-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    gfortran \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV package manager

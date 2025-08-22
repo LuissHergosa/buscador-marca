@@ -26,10 +26,15 @@ services:
       - MAX_CONCURRENT_BATCHES=3
       - PDF_DPI=300
       - MAX_IMAGE_SIZE=20000
-      - IMAGE_QUALITY=85
+      - IMAGE_QUALITY=95
       - THREAD_POOL_SIZE=8
       - CONNECTION_POOL_SIZE=10
       - REQUEST_TIMEOUT=0
+      - USE_GPU=false
+      - OCR_LANGUAGES=es,en
+      - OCR_CONFIDENCE_THRESHOLD=0.3
+      - OCR_MAX_RETRIES=3
+      - OCR_RETRY_DELAY=1.0
     volumes:
       - ./backend:/app
       - ./backend/uploads:/app/uploads

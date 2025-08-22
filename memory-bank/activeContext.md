@@ -1,6 +1,8 @@
 # Active Context: Document Brand Detection System
 
 ## Current Work Focus
+✅ **OCR + LLM INTEGRATION COMPLETED**: Successfully implemented EasyOCR + LLM pipeline for brand detection! The system now uses EasyOCR to extract text from image chunks with coordinate preservation, then analyzes the complete extracted text with Gemini LLM for brand detection.
+
 ✅ **500 ERROR ISSUE RESOLVED**: Fixed critical 500 Internal Server Errors that occurred during brand detection processing! Implemented retry logic, exponential backoff, and improved error handling in Firebase operations to prevent resource contention issues.
 
 ✅ **IMPROVEMENT COMPLETED**: Enhanced image resolution and text-based brand detection for architectural plans! The system now processes images at higher resolution (600 DPI) and uses optimized prompts specifically for detecting brands mentioned as text in architectural drawings.
@@ -10,6 +12,15 @@
 ✅ **PIL LIMITS REMOVED**: Eliminated PIL decompression bomb limits and added comprehensive logging for debugging! The system now processes images of any size without restrictions.
 
 ## Recent Features Implemented ✅
+
+### OCR + LLM Pipeline Integration ✅ IMPLEMENTED
+- **EasyOCR Integration**: Added EasyOCR dependency with Spanish and English language support
+- **Text Extraction Pipeline**: Implemented chunk-based text extraction with coordinate preservation
+- **LLM Text Analysis**: Modified brand detection to analyze extracted text instead of images
+- **GPU/CPU Support**: Configured for both GPU acceleration and CPU fallback
+- **Retry Logic**: Added retry mechanism for OCR failures with exponential backoff
+- **Accuracy Optimization**: Configured EasyOCR for maximum text detection accuracy
+- **Coordinate Preservation**: Maintains text position information for future use
 
 ### Enhanced Image Processing & Brand Detection ✅ IMPLEMENTED
 - **Higher Resolution Processing**: Increased PDF DPI from 300 to 600 for better text clarity
@@ -48,14 +59,20 @@
 - **Real-time Updates**: Review status changes are immediately reflected in the UI
 
 ### Key Features:
-1. **Individual Brand Review**: Each detected brand can be marked as reviewed/unreviewed
-2. **Visual Feedback**: Brands are categorized into "Por Revisar" and "Revisado" tabs
-3. **Click to Toggle**: Users can click on any brand to change its review status
-4. **Persistent Storage**: Review status is saved in Firebase and persists across sessions
-5. **Real-time Sync**: Changes are immediately reflected and synced across all users
-6. **Enhanced Text Detection**: Better detection of brands mentioned as text in architectural plans
-7. **Heavy File Support**: No limits on file size or processing time for large architectural plans
-8. **Comprehensive Debugging**: Detailed logs for troubleshooting and performance monitoring
+1. **OCR + LLM Pipeline**: Text extraction with EasyOCR followed by LLM analysis
+2. **Coordinate Preservation**: Maintains text position information for future enhancements
+3. **Multi-language Support**: Spanish and English text recognition
+4. **GPU/CPU Flexibility**: Works on both GPU and CPU environments
+5. **Retry Mechanism**: Automatic retry for OCR failures with exponential backoff
+6. **Accuracy Optimization**: Configured for maximum text detection precision
+7. **Individual Brand Review**: Each detected brand can be marked as reviewed/unreviewed
+8. **Visual Feedback**: Brands are categorized into "Por Revisar" and "Revisado" tabs
+9. **Click to Toggle**: Users can click on any brand to change its review status
+10. **Persistent Storage**: Review status is saved in Firebase and persists across sessions
+11. **Real-time Sync**: Changes are immediately reflected and synced across all users
+12. **Enhanced Text Detection**: Better detection of brands mentioned as text in architectural plans
+13. **Heavy File Support**: No limits on file size or processing time for large architectural plans
+14. **Comprehensive Debugging**: Detailed logs for troubleshooting and performance monitoring
 
 ## Current Status
 
@@ -65,7 +82,8 @@
 - ✅ **Firebase Service**: Review status persistence and retrieval
 - ✅ **Data Validation**: Proper validation of brand existence and document ownership
 - ✅ **Image Processing**: Enhanced resolution and quality settings for better text detection
-- ✅ **Brand Detection**: Optimized prompts for text-based brand detection in architectural plans
+- ✅ **OCR Service**: New EasyOCR service for text extraction with coordinate preservation
+- ✅ **Brand Detection**: Updated to use OCR + LLM pipeline for improved accuracy
 
 ### Frontend Components Status
 - ✅ **DocumentUpload**: Fully functional with drag & drop
@@ -89,6 +107,7 @@
 3. **Create API endpoints** ✅
 4. **Brand review system** ✅
 5. **Enhanced image processing** ✅
+6. **OCR + LLM pipeline integration** ✅
 
 ### Phase 2: Frontend Development ✅ COMPLETED
 1. **Set up React project with Bun** ✅
@@ -113,6 +132,7 @@
    - Validate real-time updates
    - Performance testing
    - Test enhanced image processing and brand detection
+   - Test OCR + LLM pipeline
 
 ## Current Decisions & Considerations
 
@@ -121,21 +141,23 @@
 - **Frontend**: React with Bun and shadcn/ui for modern UI development
 - **Database**: Firebase Firestore for flexible document storage
 - **AI**: Google Gemini 2.5 via Langchain for brand detection
+- **OCR**: EasyOCR for text extraction with Spanish and English support
 - **Real-time**: WebSocket or Server-Sent Events for live updates
 - **Containerization**: Docker Compose for easy development and deployment
 - **Review System**: Individual brand-level review status tracking
 - **Image Processing**: High-resolution processing (600 DPI) for better text detection
-- **Brand Detection**: Text-focused prompts optimized for architectural plans
+- **Brand Detection**: OCR + LLM pipeline for improved accuracy and performance
 
 ### Architecture Decisions
+- **OCR + LLM Pipeline**: Text extraction followed by LLM analysis instead of direct image analysis
 - **Async Processing**: Each PDF page processed independently
 - **No PDF Storage**: Only analysis results stored, not original files
-- **Simple Brand Detection**: LLM text response only, no bounding boxes
+- **Text-based Detection**: LLM analyzes extracted text instead of images
 - **Real-time Updates**: Live progress tracking during processing
 - **Modal UX**: Document analysis displayed in modal for better user experience
 - **Review Persistence**: Brand review status stored per brand per page
 - **High-Quality Images**: Preserved image resolution for better text detection
-- **Text-Optimized Processing**: Focus on detecting brands mentioned as text
+- **Coordinate Preservation**: Maintains text position information for future enhancements
 
 ### UI/UX Improvements
 - **Modern Design**: Replace dark theme with modern-minimal theme
@@ -149,12 +171,13 @@
 ## Active Considerations
 
 ### Performance
-- PDF processing efficiency for large documents with high resolution
-- Image optimization while preserving text clarity
+- OCR processing efficiency for large documents with high resolution
+- Text extraction accuracy vs processing speed balance
+- LLM text analysis performance with large text documents
 - Real-time update frequency and bandwidth usage
 - Firebase query optimization
 - Review status update frequency
-- AI processing time with higher resolution images
+- GPU vs CPU performance optimization
 
 ### User Experience
 - Intuitive file upload process
@@ -163,27 +186,31 @@
 - Responsive design for different screen sizes
 - Modal-based document analysis for better UX
 - Smooth brand review status transitions
-- Better brand detection accuracy for text-based brands
+- Better brand detection accuracy through OCR + LLM pipeline
 
 ### Scalability
 - Handling multiple concurrent document uploads
-- Efficient async processing of multiple pages with high resolution
+- Efficient async processing of multiple pages with OCR
 - Database performance with large result sets
 - Future authentication and multi-user support
 - Review status synchronization across users
-- AI API rate limits with higher quality processing
+- OCR and LLM API rate limits with higher quality processing
+- GPU resource management for OCR processing
 
 ## Known Issues & Challenges
-- **API Rate Limits**: Google Gemini API usage limits with higher resolution processing
+- **API Rate Limits**: Google Gemini API usage limits with text analysis
+- **OCR Performance**: EasyOCR processing time for large images
 - **File Size Limits**: Large PDF handling and processing with enhanced resolution
 - **Real-time Complexity**: WebSocket connection management
-- **Error Handling**: Graceful degradation for failed pages
+- **Error Handling**: Graceful degradation for failed OCR or LLM processing
 - **Review Conflicts**: Potential conflicts in multi-user scenarios
-- **Processing Time**: Higher resolution may increase processing time per page
+- **Processing Time**: OCR + LLM pipeline may increase processing time per page
+- **GPU Memory**: EasyOCR GPU memory usage for large images
 
 ## Success Criteria for Current Phase
 - [x] Backend can process PDF files and extract pages
-- [x] Brand detection works with Gemini 2.5
+- [x] OCR service can extract text from images with coordinate preservation
+- [x] Brand detection works with OCR + LLM pipeline
 - [x] Firebase integration stores and retrieves data
 - [x] Frontend provides intuitive document upload
 - [x] Real-time updates work during processing
@@ -191,8 +218,8 @@
 - [x] Document analysis shows real results in modal
 - [x] Brand review status system fully functional
 - [x] Enhanced image processing for better text detection
-- [x] Optimized prompts for text-based brand detection
+- [x] OCR + LLM pipeline integration completed
 - [ ] Docker setup works for local development
 
 ## Next Milestone
-Complete Phase 3 (Integration & Testing) with end-to-end testing and deployment preparation, including testing the enhanced image processing capabilities.
+Complete Phase 3 (Integration & Testing) with end-to-end testing and deployment preparation, including testing the OCR + LLM pipeline capabilities.

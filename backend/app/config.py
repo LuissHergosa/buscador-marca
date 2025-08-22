@@ -4,9 +4,9 @@ Optimized for performance with parallel processing and memory efficiency.
 """
 
 import os
-from typing import Optional
+from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator, field_serializer
 
 
 class Settings(BaseSettings):
@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     max_image_size: int = Field(default=20000, env="MAX_IMAGE_SIZE")  # Increased for better resolution
     image_quality: int = Field(default=95, env="IMAGE_QUALITY")  # PNG quality for better text clarity
     
+    # OCR Processing - EasyOCR configuration
+    use_gpu: bool = Field(default=True, env="USE_GPU")  # Use GPU if available, fallback to CPU
+    ocr_languages: str = Field(default="es,en", env="OCR_LANGUAGES")  # Spanish and English as comma-separated string
+    ocr_confidence_threshold: float = Field(default=0.3, env="OCR_CONFIDENCE_THRESHOLD")  # Minimum confidence for text detection
+    ocr_max_retries: int = Field(default=3, env="OCR_MAX_RETRIES")  # Retry attempts for OCR
+    ocr_retry_delay: float = Field(default=1.0, env="OCR_RETRY_DELAY")  # Initial retry delay in seconds
+    
     # Performance optimizations
     thread_pool_size: int = Field(default=8, env="THREAD_POOL_SIZE")  # Thread pool size for CPU-intensive tasks
     connection_pool_size: int = Field(default=10, env="CONNECTION_POOL_SIZE")  # Connection pool size
@@ -65,6 +72,11 @@ class Settings(BaseSettings):
     langchain_api_key: Optional[str] = Field(default=None, env="LANGSMITH_API_KEY")
     langchain_project: Optional[str] = Field(default=None, env="LANGCHAIN_PROJECT")
     langsmith_endpoint: Optional[str] = Field(default=None, env="LANGSMITH_ENDPOINT")
+    
+    @property
+    def ocr_languages_list(self) -> List[str]:
+        """Get OCR languages as a list."""
+        return [lang.strip() for lang in self.ocr_languages.split(',') if lang.strip()]
     
     class Config:
         env_file = ".env"
