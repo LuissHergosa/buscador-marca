@@ -1,15 +1,17 @@
 """
 OCR Service using EasyOCR for text extraction from images.
 Optimized for accuracy with coordinate preservation and retry logic.
+Uses OpenCV for grayscale preprocessing to improve performance and accuracy.
 """
 
 import asyncio
 import logging
 import time
-from typing import List, Tuple, Dict, Optional
+import gc
+from typing import List, Tuple, Dict
 from dataclasses import dataclass
 import easyocr
-from PIL import Image
+import cv2
 import numpy as np
 
 from ..config import settings
@@ -72,22 +74,26 @@ class OCRService:
         self.chunk_size = (1024, 1024)  # 1024x1024 pixels per chunk
         self.chunk_overlap = 200  # 200 pixels overlap between chunks
         
+        # Memory management configuration
+        self.max_concurrent_chunks = 20  # Process max 20 chunks at once to prevent memory overflow
+        self.chunk_batch_size = 10  # Process in smaller batches to manage memory better
+        
         # Retry configuration
         self.max_retries = settings.ocr_max_retries
         self.retry_delay = settings.ocr_retry_delay  # seconds
     
-    def _split_image_into_chunks(self, image: Image.Image) -> List[Tuple[Image.Image, Tuple[int, int]]]:
+    def _split_image_into_chunks(self, image: np.ndarray) -> List[Tuple[np.ndarray, Tuple[int, int]]]:
         """
         Split image into overlapping chunks for detailed text extraction.
         
         Args:
-            image: PIL Image object
+            image: OpenCV grayscale image (numpy array)
             
         Returns:
             List of tuples containing (chunk_image, chunk_position)
         """
         try:
-            width, height = image.size
+            height, width = image.shape
             chunk_width, chunk_height = self.chunk_size
             overlap = self.chunk_overlap
             
@@ -106,11 +112,12 @@ class OCRService:
                     right = min(x + chunk_width, width)
                     bottom = min(y + chunk_height, height)
                     
-                    # Extract chunk
-                    chunk = image.crop((left, top, right, bottom))
+                    # Extract chunk using OpenCV array slicing
+                    chunk = image[top:bottom, left:right]
                     
                     # Only add chunks that are large enough to be meaningful
-                    if chunk.size[0] >= 200 and chunk.size[1] >= 200:
+                    chunk_height_actual, chunk_width_actual = chunk.shape
+                    if chunk_width_actual >= 200 and chunk_height_actual >= 200:
                         chunks.append((chunk, (x, y)))
             
             logger.info(f"Split image into {len(chunks)} chunks for OCR analysis")
@@ -146,7 +153,7 @@ class OCRService:
     
     async def extract_text_from_chunk(
         self, 
-        chunk_image: Image.Image, 
+        chunk_image: np.ndarray, 
         chunk_position: Tuple[int, int],
         page_number: int
     ) -> List[TextDetection]:
@@ -154,7 +161,7 @@ class OCRService:
         Extract text from a single image chunk using EasyOCR with retry logic.
         
         Args:
-            chunk_image: PIL Image chunk
+            chunk_image: OpenCV grayscale image chunk (numpy array)
             chunk_position: Position of the chunk (x, y)
             page_number: Page number being processed
             
@@ -167,15 +174,18 @@ class OCRService:
                     start_time = time.time()
                     logger.info(f"Starting OCR for page {page_number}, chunk at {chunk_position} (attempt {attempt + 1})")
                     
-                    # Convert PIL Image to numpy array for EasyOCR
-                    chunk_array = np.array(chunk_image)
+                    # Apply additional preprocessing for better OCR accuracy
+                    processed_chunk = self._preprocess_chunk_for_ocr(chunk_image)
                     
-                    # Perform OCR with EasyOCR
+                    # Perform OCR with EasyOCR (EasyOCR accepts both grayscale and color images)
                     results = self.reader.readtext(
-                        chunk_array,
+                        processed_chunk,
                         detail=1,  # Get detailed results with coordinates
-                        # Accuracy-foc
+                        # Accuracy-focused settings for grayscale images
                     )
+                    
+                    # Clean up processed chunk to free memory immediately
+                    del processed_chunk
                     
                     # Process results
                     text_detections = []
@@ -195,6 +205,9 @@ class OCRService:
                                     chunk_position=chunk_position
                                 )
                                 text_detections.append(detection)
+                    
+                    # Clean up OCR results to free memory
+                    del results
                     
                     processing_time = time.time() - start_time
                     logger.info(f"OCR completed for chunk {chunk_position}: {len(text_detections)} text detections in {processing_time:.2f} seconds")
@@ -217,16 +230,79 @@ class OCRService:
             
             return []
     
+    def _preprocess_chunk_for_ocr(self, chunk: np.ndarray) -> np.ndarray:
+        """
+        Apply additional preprocessing to grayscale chunk for better OCR accuracy.
+        
+        Args:
+            chunk: OpenCV grayscale image chunk
+            
+        Returns:
+            Preprocessed grayscale image
+        """
+        try:
+            # Apply Gaussian blur to reduce noise (optional, can improve accuracy)
+            # denoised = cv2.GaussianBlur(chunk, (3, 3), 0)
+            
+            # Apply histogram equalization to improve contrast
+            equalized = cv2.equalizeHist(chunk)
+            
+            # Apply slight sharpening using unsharp masking (optional)
+            # blurred = cv2.GaussianBlur(equalized, (0, 0), 2.0)
+            # sharpened = cv2.addWeighted(equalized, 1.5, blurred, -0.5, 0)
+            
+            return equalized
+            
+        except Exception as e:
+            logger.warning(f"Preprocessing failed, using original chunk: {str(e)}")
+            return chunk
+
+    def _convert_pil_to_grayscale_opencv(self, pil_image) -> np.ndarray:
+        """
+        Convert PIL Image to OpenCV grayscale format.
+        
+        Args:
+            pil_image: PIL Image object (can be RGB or RGBA)
+            
+        Returns:
+            OpenCV grayscale image as numpy array
+        """
+        try:
+            # Convert PIL to OpenCV format (RGB to BGR)
+            if pil_image.mode == 'RGBA':
+                # Convert RGBA to RGB first
+                pil_rgb = pil_image.convert('RGB')
+                opencv_bgr = cv2.cvtColor(np.array(pil_rgb), cv2.COLOR_RGB2BGR)
+            elif pil_image.mode == 'RGB':
+                # Convert RGB to BGR
+                opencv_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            else:
+                # Already grayscale or other format
+                opencv_bgr = np.array(pil_image)
+            
+            # Convert to grayscale using OpenCV
+            if len(opencv_bgr.shape) == 3:
+                grayscale = cv2.cvtColor(opencv_bgr, cv2.COLOR_BGR2GRAY)
+            else:
+                grayscale = opencv_bgr
+            
+            logger.info(f"Converted PIL image to grayscale OpenCV format: {grayscale.shape}")
+            return grayscale
+            
+        except Exception as e:
+            logger.error(f"Failed to convert PIL to OpenCV grayscale: {str(e)}")
+            raise Exception(f"Failed to convert PIL to OpenCV grayscale: {str(e)}")
+
     async def extract_text_from_image(
         self, 
-        image: Image.Image, 
+        pil_image, 
         page_number: int
     ) -> Dict[str, any]:
         """
-        Extract all text from an image using chunk-based OCR processing.
+        Extract all text from an image using chunk-based OCR processing with grayscale preprocessing.
         
         Args:
-            image: PIL Image object
+            pil_image: PIL Image object (will be converted to grayscale OpenCV format)
             page_number: Page number being processed
             
         Returns:
@@ -238,11 +314,15 @@ class OCRService:
         try:
             start_time = time.time()
             logger.info(f"Starting chunk-based OCR for page {page_number}")
-            logger.info(f"Image size: {image.size}, Mode: {image.mode}")
+            
+            # Convert PIL image to OpenCV grayscale format for better OCR performance
+            logger.info(f"Converting PIL image to grayscale OpenCV format for page {page_number}")
+            opencv_grayscale = self._convert_pil_to_grayscale_opencv(pil_image)
+            logger.info(f"Grayscale image shape: {opencv_grayscale.shape}")
             
             # Split image into chunks
-            logger.info(f"Splitting image into chunks for page {page_number}")
-            chunks = self._split_image_into_chunks(image)
+            logger.info(f"Splitting grayscale image into chunks for page {page_number}")
+            chunks = self._split_image_into_chunks(opencv_grayscale)
             
             if not chunks:
                 logger.warning(f"No valid chunks created for page {page_number}")
@@ -252,21 +332,39 @@ class OCRService:
                     'processing_time': time.time() - start_time
                 }
             
-            logger.info(f"Created {len(chunks)} chunks for OCR analysis")
+            logger.info(f"Created {len(chunks)} grayscale chunks for OCR analysis")
             
-            # Create tasks for concurrent chunk processing
-            tasks = []
-            for chunk_image, chunk_position in chunks:
-                task = self.extract_text_from_chunk(
-                    chunk_image, 
-                    chunk_position, 
-                    page_number
-                )
-                tasks.append(task)
+            # Process chunks in batches to manage memory usage
+            logger.info(f"Executing {len(chunks)} OCR tasks in batches of {self.chunk_batch_size} on grayscale chunks")
+            chunk_results = []
             
-            # Execute chunk processing concurrently
-            logger.info(f"Executing {len(tasks)} OCR tasks concurrently")
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Process chunks in smaller batches to prevent memory overflow
+            for i in range(0, len(chunks), self.chunk_batch_size):
+                batch_end = min(i + self.chunk_batch_size, len(chunks))
+                batch_chunks = chunks[i:batch_end]
+                
+                logger.info(f"Processing OCR batch {i//self.chunk_batch_size + 1}/{(len(chunks) + self.chunk_batch_size - 1)//self.chunk_batch_size}: chunks {i+1}-{batch_end}")
+                
+                # Create tasks for current batch
+                batch_tasks = []
+                for chunk_image, chunk_position in batch_chunks:
+                    task = self.extract_text_from_chunk(
+                        chunk_image, 
+                        chunk_position, 
+                        page_number
+                    )
+                    batch_tasks.append(task)
+                
+                # Execute current batch concurrently
+                batch_chunk_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                chunk_results.extend(batch_chunk_results)
+                
+                # Force garbage collection after each batch to free memory
+                del batch_tasks
+                del batch_chunks
+                gc.collect()
+                
+                logger.info(f"Completed batch {i//self.chunk_batch_size + 1}, processed {len(batch_chunk_results)} chunks")
             
             # Collect all text detections from all chunks
             all_text_detections = []
@@ -283,10 +381,15 @@ class OCRService:
             
             # Calculate processing time
             processing_time = time.time() - start_time
-            logger.info(f"OCR completed for page {page_number}: {len(all_text_detections)} text detections, {len(full_text)} characters in {processing_time:.2f} seconds")
+            logger.info(f"Grayscale OCR completed for page {page_number}: {len(all_text_detections)} text detections, {len(full_text)} characters in {processing_time:.2f} seconds")
             
             if full_text:
-                logger.info(f"Sample text from page {page_number}: {full_text[:200]}...")
+                logger.info(f"Sample text from grayscale OCR on page {page_number}: {full_text[:200]}...")
+            
+            # Clean up large variables to free memory
+            del chunks
+            del chunk_results
+            gc.collect()
             
             return {
                 'full_text': full_text,
@@ -295,7 +398,7 @@ class OCRService:
             }
             
         except Exception as e:
-            logger.error(f"OCR processing failed for page {page_number}: {str(e)}")
+            logger.error(f"Grayscale OCR processing failed for page {page_number}: {str(e)}")
             return {
                 'full_text': '',
                 'text_detections': [],

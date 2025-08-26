@@ -4,17 +4,15 @@ First extracts text using EasyOCR, then analyzes text with Google Gemini 2.5.
 Optimized for performance with parallel processing and connection pooling.
 """
 
-import base64
-import io
 import json
 import logging
 import re
 import time
 import asyncio
-from typing import List, Optional, Tuple
+import gc
+from typing import List
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage
-from PIL import Image
 
 from ..config import settings
 from ..models.brand_detection import BrandDetectionCreate
@@ -260,7 +258,7 @@ class BrandDetectionService:
         4. Analyze the complete page text with LLM for brand detection
         
         Args:
-            image: PIL Image object
+            image: PIL Image object (will be converted to grayscale OpenCV in OCR service)
             page_number: Page number being analyzed
             
         Returns:
@@ -269,7 +267,7 @@ class BrandDetectionService:
         try:
             start_time = time.time()
             logger.info(f"Starting optimized OCR + LLM brand detection for page {page_number}")
-            logger.info(f"Image size: {image.size}, Mode: {image.mode}")
+            logger.info(f"Image size: {image.size}, Mode: {image.mode} (will be converted to grayscale)")
             
             # Step 1: Extract text using chunk-based OCR
             logger.info(f"Step 1: Extracting text using chunk-based OCR for page {page_number}")
@@ -280,6 +278,10 @@ class BrandDetectionService:
             ocr_processing_time = ocr_result['processing_time']
             
             logger.info(f"OCR completed for page {page_number}: {len(extracted_text)} characters extracted from {len(text_detections)} text detections in {ocr_processing_time:.2f} seconds")
+            
+            # Clear image from memory after OCR to prevent accumulation
+            del image
+            gc.collect()
             
             if not extracted_text or extracted_text.strip() == "":
                 logger.warning(f"No text extracted from page {page_number} - no brands to detect")
@@ -293,6 +295,12 @@ class BrandDetectionService:
             logger.info(f"Text sample for LLM analysis: {extracted_text[:500]}...")
             
             detected_brands = await self.detect_brands_from_text(extracted_text, page_number)
+            
+            # Clear large text variables to free memory
+            del extracted_text
+            del text_detections
+            del ocr_result
+            gc.collect()
             
             # Calculate total processing time
             total_processing_time = time.time() - start_time
@@ -318,13 +326,13 @@ class BrandDetectionService:
     
     async def detect_brands_in_multiple_images(
         self, 
-        images: List[Image.Image]
+        images: List
     ) -> List[BrandDetectionCreate]:
         """
         Detect brands in multiple images with optimized parallel processing.
         
         Args:
-            images: List of PIL Image objects
+            images: List of PIL Image objects (will be converted to grayscale OpenCV in OCR service)
             
         Returns:
             List of BrandDetectionCreate objects
