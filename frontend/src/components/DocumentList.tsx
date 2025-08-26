@@ -22,14 +22,21 @@ const DocumentList: React.FC<DocumentListProps> = ({ onDocumentSelect, filters }
   const { statuses } = useProcessingStatusStore();
   const { mutate: deleteDocument } = useDeleteDocument();
 
-  // Filter documents
+  // Filter and sort documents
   const filteredDocuments = useMemo(() => {
-    return documents.filter((doc: Document) => {
+    const filtered = documents.filter((doc: Document) => {
       const matchesSearch = filters.search === '' || 
         doc.filename.toLowerCase().includes(filters.search.toLowerCase());
       const matchesType = filters.type === 'all' || filters.type === '' || doc.filename.toLowerCase().includes(filters.type.toLowerCase());
       const matchesSpecialty = filters.specialty === 'all' || filters.specialty === '' || doc.filename.toLowerCase().includes(filters.specialty.toLowerCase());
       return matchesSearch && matchesType && matchesSpecialty;
+    });
+    
+    // Sort by upload_date (most recent first)
+    return filtered.sort((a, b) => {
+      const dateA = new Date(a.upload_date).getTime();
+      const dateB = new Date(b.upload_date).getTime();
+      return dateB - dateA; // Descending order (newest first)
     });
   }, [documents, filters]);
 
@@ -49,6 +56,31 @@ const DocumentList: React.FC<DocumentListProps> = ({ onDocumentSelect, filters }
       default:
         return <Badge className="bg-gray-100 text-gray-800">{status}</Badge>;
     }
+  };
+
+  // Format upload date for display
+  const formatUploadDate = (uploadDate: string) => {
+    const date = new Date(uploadDate);
+    return date.toLocaleString('es-ES', {
+      year: 'numeric',
+      month: '2-digit', 
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Get processed pages count
+  const getProcessedPages = (document: Document) => {
+    const processingStatus = statuses[document.id];
+    if (processingStatus) {
+      return processingStatus.processed_pages;
+    }
+    // For completed documents, assume all pages are processed
+    if (document.status === 'completed') {
+      return document.total_pages;
+    }
+    return 0;
   };
 
   // Handle delete
@@ -108,17 +140,21 @@ const DocumentList: React.FC<DocumentListProps> = ({ onDocumentSelect, filters }
               {document.status === 'completed' && <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 ml-2" />}
             </div>
             
-            <p className="text-blue-600 text-xs mb-2">
+            <div className="text-gray-500 text-xs mb-2">
+              <span className="font-medium">Subido:</span> {formatUploadDate(document.upload_date)}
+            </div>
+            
+            <div className="text-blue-600 text-xs mb-2 flex items-center gap-2">
               <span className="font-medium">Estado:</span> {getStatusBadge(document.status)}
-            </p>
+            </div>
             
-            <p className="text-blue-500 text-xs mb-2">
-              <span className="font-medium">Páginas procesadas:</span> {document.total_pages}
-            </p>
+            <div className="text-blue-500 text-xs mb-2">
+              <span className="font-medium">Páginas procesadas:</span> {getProcessedPages(document)} de {document.total_pages}
+            </div>
             
-            <p className="text-gray-500 text-xs mb-4">
+            <div className="text-gray-500 text-xs mb-4">
               <span className="font-medium">Resultados:</span> {document.results?.reduce((total, result) => total + (result.brands_detected?.length || 0), 0) || 0}
-            </p>
+            </div>
 
             {/* Processing Progress */}
             {document.status === 'processing' && processingStatus && (

@@ -6,6 +6,7 @@ import logging
 import os
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi.responses import StreamingResponse
 import asyncio
 
 from ..models.document import Document, DocumentCreate, DocumentUpdate
@@ -13,6 +14,7 @@ from ..models.processing_status import ProcessingStatus
 from ..models.brand_detection import BrandReviewUpdate
 from ..services.processing_service import processing_service
 from ..services.firebase_service import firebase_service
+from ..services.excel_service import ExcelService
 from ..config import settings
 
 # Configure logging
@@ -301,6 +303,47 @@ async def get_document_summary(document_id: str) -> dict:
     except Exception as e:
         logger.error(f"API: Failed to get document summary {document_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get document summary: {str(e)}")
+
+
+@router.get("/{document_id}/export/excel")
+async def export_document_excel(document_id: str):
+    """
+    Export document brand detection results as Excel file.
+
+    Args:
+        document_id: Document ID
+
+    Returns:
+        Excel file as StreamingResponse
+    """
+    try:
+        logger.info(f"API: Exporting document {document_id} to Excel")
+        
+        # Get document with results
+        document = await firebase_service.get_document(document_id)
+        if not document:
+            logger.warning(f"API: Document not found for Excel export: {document_id}")
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Generate Excel file
+        excel_service = ExcelService()
+        excel_buffer = excel_service.generate_document_results_excel(document)
+        filename = excel_service.generate_filename(document)
+        
+        logger.info(f"API: Excel file generated successfully for {document_id}, filename: {filename}")
+        
+        # Return as streaming response
+        return StreamingResponse(
+            iter([excel_buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to export document {document_id} to Excel: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export Excel: {str(e)}")
 
 
 @router.get("/{document_id}/status", response_model=ProcessingStatus)

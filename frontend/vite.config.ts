@@ -16,7 +16,8 @@ export default defineConfig({
       usePolling: true, // Enable polling for Docker on Windows
     },
     hmr: {
-      port: 5173, // Hot Module Replacement port
+      port: 3000, // Hot Module Replacement port should match Docker port mapping
+      host: 'localhost'
     },
   },
 })
