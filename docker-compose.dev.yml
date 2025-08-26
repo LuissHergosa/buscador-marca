@@ -67,9 +67,10 @@ services:
     
     # Windows-specific optimizations
     runtime: nvidia
-    shm_size: 2gb
-    mem_limit: 8g
-    cpus: 4.0
+    # Remove all resource limits to prevent unexpected crashes during heavy processing
+    # shm_size: unlimited (commented out)
+    # mem_limit: unlimited (commented out)
+    # cpus: unlimited (commented out)
     
     # Health check for Windows
     healthcheck:
