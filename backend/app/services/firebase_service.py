@@ -161,6 +161,7 @@ class FirebaseService:
                         upload_date=doc_data.get("upload_date", datetime.utcnow()),
                         status=doc_data.get("status", "unknown"),
                         results=results,
+                        summary=doc_data.get("summary", None),
                     )
 
                     logger.info(f"Successfully fetched document: {document_id}")
@@ -278,6 +279,7 @@ class FirebaseService:
                                 ),
                                 status=doc_data.get("status", "unknown"),
                                 results=results,
+                                summary=doc_data.get("summary", None),
                             )
                             documents.append(document)
                         except Exception as e:
@@ -420,6 +422,34 @@ class FirebaseService:
             doc_ref.update(result_data)
         except FirebaseError as e:
             raise Exception(f"Failed to update page status: {str(e)}")
+    
+    async def save_document_summary(self, document_id: str, summary: dict) -> None:
+        """
+        Save document processing summary with all detected brands and statistics.
+        
+        Args:
+            document_id: Document ID
+            summary: Dictionary containing processing summary
+        """
+        try:
+            logger.info(f"Saving document summary for {document_id}")
+            doc_ref = self.documents_collection.document(document_id)
+            
+            # Update document with summary information
+            doc_ref.update({
+                "summary": summary,
+                "last_updated": datetime.utcnow()
+            })
+            
+            logger.info(f"Document summary saved successfully for {document_id}")
+            logger.info(f"Summary: {summary['total_unique_brands']} unique brands detected across {summary['successful_pages']} pages")
+            
+        except FirebaseError as e:
+            logger.error(f"Failed to save document summary for {document_id}: {str(e)}")
+            raise Exception(f"Failed to save document summary: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error saving document summary for {document_id}: {str(e)}")
+            raise Exception(f"Failed to save document summary: {str(e)}")
 
     async def get_processing_status(
         self, document_id: str

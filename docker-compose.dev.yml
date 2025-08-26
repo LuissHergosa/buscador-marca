@@ -42,6 +42,9 @@ services:
       - REQUEST_TIMEOUT=0
       - MAX_FILE_SIZE=0
       
+      # Development
+      - ENVIRONMENT=development
+      
       # LangChain (optional)
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
@@ -82,10 +85,31 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
-    container_name: buscador-marca-frontend
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: buscador-marca-frontend-dev
     ports:
-      - "3000:80"
+      - "3000:5173"  # Vite dev server default port
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true  # Para compatibilidad con Windows Docker
+    volumes:
+      # Mount source code for hot reloading
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/bun.lock:/app/bun.lock
+      - ./frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/components.json:/app/components.json
+      # Exclude node_modules from being mounted
+      - /app/node_modules
     depends_on:
       backend:
         condition: service_healthy

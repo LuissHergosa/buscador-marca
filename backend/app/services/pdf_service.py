@@ -316,8 +316,15 @@ class PDFService:
     
     def __del__(self):
         """Cleanup thread pool on deletion."""
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=False)
+        try:
+            if hasattr(self, 'executor') and self.executor:
+                logger.info("Shutting down PDF service thread pool executor")
+                # Use shutdown with wait=False to avoid blocking during cleanup
+                self.executor.shutdown(wait=False)
+                logger.info("PDF service thread pool executor shutdown completed")
+        except Exception as e:
+            # Don't log during shutdown as it might cause issues
+            pass
 
 
 # Global PDF service instance

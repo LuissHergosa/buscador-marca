@@ -83,21 +83,24 @@ class BrandDetectionService:
            - Examina TODAS las líneas y párrafos sin importar el contexto
            - Busca marcas en diferentes formatos (mayúsculas, minúsculas, mixtas)
            - Considera variaciones de escritura y abreviaciones
+           - Analiza nombres de modelos y números de serie que puedan indicar marcas
         
         2. **TIPOS DE MARCAS A DETECTAR**:
-           - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, Schneider, ABB, etc.)
-           - Materiales de construcción (Cemex, Holcim, Cementos Argos, Corona, etc.)
-           - Equipos de iluminación (Philips, Osram, GE, Sylvania, etc.)
-           - Sistemas de seguridad (Honeywell, Johnson Controls, Bosch Security, etc.)
-           - Equipos de aire acondicionado (Carrier, Trane, York, Daikin, Mitsubishi, etc.)
-           - Herramientas y equipos (Makita, DeWalt, Milwaukee, Bosch, Hilti, etc.)
-           - Pinturas y acabados (Sherwin-Williams, PPG, Comex, Pinturas Osel, etc.)
-           - Plomería y sanitarios (Kohler, Toto, American Standard, Corona, etc.)
-           - Pisos y acabados (Armstrong, Mohawk, Porcelanite, etc.)
-           - Equipos de cocina (Whirlpool, Samsung, LG, Bosch, etc.)
-           - Sistemas de audio/video (Sony, Samsung, LG, Bose, etc.)
-           - Equipos de cómputo (Dell, HP, Lenovo, Apple, etc.)
-           - Equipos de red (Cisco, TP-Link, Netgear, etc.)
+           - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, Schneider, ABB, General Electric, Westinghouse, etc.)
+           - Materiales de construcción (Cemex, Holcim, Cementos Argos, Corona, LafargeHolcim, etc.)
+           - Equipos de iluminación (Philips, Osram, GE Lighting, Sylvania, Cree, etc.)
+           - Sistemas de seguridad (Honeywell, Johnson Controls, Bosch Security, Axis, Hikvision, etc.)
+           - Equipos de aire acondicionado (Carrier, Trane, York, Daikin, Mitsubishi Electric, Lennox, etc.)
+           - Herramientas y equipos (Makita, DeWalt, Milwaukee, Bosch, Hilti, Caterpillar, etc.)
+           - Pinturas y acabados (Sherwin-Williams, PPG, Comex, Pinturas Osel, Benjamin Moore, etc.)
+           - Plomería y sanitarios (Kohler, Toto, American Standard, Corona, Moen, Delta, etc.)
+           - Pisos y acabados (Armstrong, Mohawk, Porcelanite, Tarkett, Shaw, etc.)
+           - Equipos de cocina (Whirlpool, Samsung, LG, Bosch, KitchenAid, Frigidaire, etc.)
+           - Sistemas de audio/video (Sony, Samsung, LG, Bose, JBL, Yamaha, etc.)
+           - Equipos de cómputo (Dell, HP, Lenovo, Apple, IBM, Microsoft, etc.)
+           - Equipos de red (Cisco, TP-Link, Netgear, Ubiquiti, D-Link, etc.)
+           - Equipos médicos (Philips Healthcare, GE Healthcare, Siemens Healthineers, etc.)
+           - Elevadores y escaleras (Otis, Schindler, KONE, ThyssenKrupp, etc.)
            - Cualquier otra marca comercial reconocible
         
         3. **CRITERIOS DE DETECCIÓN**:
@@ -110,12 +113,13 @@ class BrandDetectionService:
            - Considera marcas en diferentes idiomas (español e inglés)
         
         4. **EXCLUSIONES ESPECÍFICAS**:
-           - Hergon y todas sus variantes (Grupo Hergon SA, Hergon SA, etc.)
-           - Nombres genéricos de productos (ej: "lámpara", "interruptor")
-           - Nombres de materiales genéricos (ej: "concreto", "acero")
-           - Nombres de empresas que no son marcas comerciales
-           - Texto que no representa marcas comerciales
-           - Palabras comunes que no son marcas
+           - Hergonsa y todas sus variantes (HERGONSA, hergonsa, Grupo Hergonsa, Hergonsa SA, etc.)
+           - Nombres genéricos de productos (ej: "lámpara", "interruptor", "cable", "tubo")
+           - Nombres de materiales genéricos (ej: "concreto", "acero", "aluminio", "cobre")
+           - Nombres de empresas que no son marcas comerciales reconocidas
+           - Texto que no representa marcas comerciales (códigos, referencias, medidas)
+           - Palabras comunes que no son marcas (colores, formas, tamaños)
+           - Términos técnicos genéricos (voltaje, amperaje, frecuencia)
         
         5. **PROCESO DE VALIDACIÓN**:
            - Verifica que cada detección sea una marca comercial real
@@ -131,7 +135,7 @@ class BrandDetectionService:
         ✅ "Carrier" 
         ✅ "Kohler" 
         ✅ "Cemex" 
-        ❌ "Hergon" (excluido)
+        ❌ "Hergonsa" (excluido - nombre de la empresa cliente)
         ❌ "lámpara LED" (descripción genérica)
         ❌ "interruptor simple" (descripción genérica)
         
@@ -247,7 +251,13 @@ class BrandDetectionService:
         page_number: int
     ) -> BrandDetectionCreate:
         """
-        Detect brands in a single image using OCR + LLM pipeline.
+        Detect brands in a single image using optimized OCR + LLM pipeline.
+        
+        Process:
+        1. Split image into chunks for detailed OCR analysis
+        2. Extract text from all chunks concurrently
+        3. Aggregate all extracted text from the page
+        4. Analyze the complete page text with LLM for brand detection
         
         Args:
             image: PIL Image object
@@ -258,17 +268,18 @@ class BrandDetectionService:
         """
         try:
             start_time = time.time()
-            logger.info(f"Starting OCR + LLM brand detection for page {page_number}")
+            logger.info(f"Starting optimized OCR + LLM brand detection for page {page_number}")
             logger.info(f"Image size: {image.size}, Mode: {image.mode}")
             
-            # Step 1: Extract text using OCR
-            logger.info(f"Step 1: Extracting text using OCR for page {page_number}")
+            # Step 1: Extract text using chunk-based OCR
+            logger.info(f"Step 1: Extracting text using chunk-based OCR for page {page_number}")
             ocr_result = await self.ocr_service.extract_text_from_image(image, page_number)
             
             extracted_text = ocr_result['full_text']
+            text_detections = ocr_result['text_detections']
             ocr_processing_time = ocr_result['processing_time']
             
-            logger.info(f"OCR completed for page {page_number}: {len(extracted_text)} characters extracted in {ocr_processing_time:.2f} seconds")
+            logger.info(f"OCR completed for page {page_number}: {len(extracted_text)} characters extracted from {len(text_detections)} text detections in {ocr_processing_time:.2f} seconds")
             
             if not extracted_text or extracted_text.strip() == "":
                 logger.warning(f"No text extracted from page {page_number} - no brands to detect")
@@ -277,8 +288,10 @@ class BrandDetectionService:
                     brands_detected=[]
                 )
             
-            # Step 2: Analyze text for brands using LLM
-            logger.info(f"Step 2: Analyzing extracted text for brands on page {page_number}")
+            # Step 2: Analyze the complete page text for brands using LLM
+            logger.info(f"Step 2: Analyzing complete page text for brands on page {page_number}")
+            logger.info(f"Text sample for LLM analysis: {extracted_text[:500]}...")
+            
             detected_brands = await self.detect_brands_from_text(extracted_text, page_number)
             
             # Calculate total processing time
@@ -287,6 +300,8 @@ class BrandDetectionService:
             
             if detected_brands:
                 logger.info(f"Brands detected on page {page_number}: {detected_brands}")
+            else:
+                logger.info(f"No brands detected on page {page_number}")
             
             return BrandDetectionCreate(
                 page_number=page_number,

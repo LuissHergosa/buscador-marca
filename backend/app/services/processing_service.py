@@ -7,10 +7,8 @@ import asyncio
 import logging
 import time
 from typing import List, Optional
-from datetime import datetime
 
 from ..models.document import Document, DocumentCreate, DocumentUpdate
-from ..models.brand_detection import BrandDetectionCreate
 from ..models.processing_status import ProcessingStatus
 from .firebase_service import firebase_service
 from .pdf_service import pdf_service
@@ -125,10 +123,14 @@ class ProcessingService:
         except Exception as e:
             logger.error(f"Async document processing failed: {str(e)}")
             # Update document status to failed
-            await firebase_service.update_document(
-                document_id, 
-                DocumentUpdate(status="failed")
-            )
+            try:
+                await firebase_service.update_document(
+                    document_id, 
+                    DocumentUpdate(status="failed")
+                )
+                logger.info(f"Document {document_id} status updated to 'failed' due to processing error")
+            except Exception as update_error:
+                logger.error(f"Failed to update document {document_id} status: {str(update_error)}")
             raise e
     
     async def _process_document_async_optimized(
@@ -180,6 +182,10 @@ class ProcessingService:
                 )
                 
                 logger.info(f"Batch {batch_start // self.batch_size + 1} completed")
+            
+            # Generate final document summary
+            logger.info(f"Generating final document summary for document {document_id}")
+            await self._generate_final_document_summary(document_id, total_pages)
             
             # Update document status
             final_status = "completed"
@@ -252,9 +258,12 @@ class ProcessingService:
                 if isinstance(result, Exception):
                     logger.error(f"Error processing page {page_number} in batch: {str(result)}")
                     # Update page status to failed
-                    await firebase_service.update_page_status(
-                        document_id, page_number, "failed", str(result)
-                    )
+                    try:
+                        await firebase_service.update_page_status(
+                            document_id, page_number, "failed", str(result)
+                        )
+                    except Exception as update_error:
+                        logger.error(f"Failed to update page {page_number} status: {str(update_error)}")
                     # Update tracking
                     self.active_processes[document_id]["failed_pages"] += 1
                 else:
@@ -266,7 +275,8 @@ class ProcessingService:
             
         except Exception as e:
             logger.error(f"Error processing batch for document {document_id}: {str(e)}")
-            raise e
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Batch processing error will not crash the application: {str(e)}")
     
     async def _process_single_page(
         self, 
@@ -285,9 +295,12 @@ class ProcessingService:
         try:
             # Update page status to processing
             logger.info(f"Updating page {page_number} status to 'processing'")
-            await firebase_service.update_page_status(
-                document_id, page_number, "processing"
-            )
+            try:
+                await firebase_service.update_page_status(
+                    document_id, page_number, "processing"
+                )
+            except Exception as update_error:
+                logger.error(f"Failed to update page {page_number} status to 'processing': {str(update_error)}")
             
             # Detect brands in image
             logger.info(f"Starting brand detection for page {page_number}")
@@ -297,16 +310,85 @@ class ProcessingService:
             
             # Save result to Firebase
             logger.info(f"Saving brand detection result for page {page_number}")
-            await firebase_service.save_brand_detection_result(
-                document_id, page_number, result, 0  # Processing time will be calculated by the service
-            )
+            try:
+                await firebase_service.save_brand_detection_result(
+                    document_id, page_number, result, 0  # Processing time will be calculated by the service
+                )
+            except Exception as save_error:
+                logger.error(f"Failed to save brand detection result for page {page_number}: {str(save_error)}")
             
             logger.info(f"Page {page_number} completed successfully")
             return result
             
         except Exception as e:
             logger.error(f"Error processing page {page_number} for document {document_id}: {str(e)}")
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Page processing error will not crash the application: {str(e)}")
             raise e
+    
+    async def _generate_final_document_summary(self, document_id: str, total_pages: int):
+        """
+        Generate final document summary with all detected brands and statistics.
+        
+        Args:
+            document_id: Document ID
+            total_pages: Total number of pages processed
+        """
+        try:
+            logger.info(f"Generating final summary for document {document_id}")
+            
+            # Get the document with all results
+            document = await firebase_service.get_document(document_id)
+            if not document:
+                logger.error(f"Document {document_id} not found for summary generation")
+                return
+            
+            # Collect all unique brands from all pages
+            all_brands = set()
+            successful_pages = 0
+            failed_pages = 0
+            total_processing_time = 0
+            
+            for result in document.results:
+                if result.status == "completed":
+                    successful_pages += 1
+                    all_brands.update(result.brands_detected)
+                    total_processing_time += result.processing_time
+                else:
+                    failed_pages += 1
+            
+            # Create document summary
+            summary = {
+                "total_pages": total_pages,
+                "successful_pages": successful_pages,
+                "failed_pages": failed_pages,
+                "total_unique_brands": len(all_brands),
+                "all_detected_brands": sorted(list(all_brands)),
+                "total_processing_time": total_processing_time,
+                "brands_by_page": {
+                    str(result.page_number): {
+                        "brands": result.brands_detected,
+                        "brand_count": len(result.brands_detected),
+                        "processing_time": result.processing_time,
+                        "status": result.status
+                    }
+                    for result in document.results
+                }
+            }
+            
+            # Save summary to Firebase
+            await firebase_service.save_document_summary(document_id, summary)
+            
+            logger.info(f"Final summary generated for document {document_id}:")
+            logger.info(f"  - Total pages: {total_pages}")
+            logger.info(f"  - Successful pages: {successful_pages}")
+            logger.info(f"  - Failed pages: {failed_pages}")
+            logger.info(f"  - Total unique brands detected: {len(all_brands)}")
+            logger.info(f"  - Brands found: {sorted(list(all_brands))}")
+            logger.info(f"  - Total processing time: {total_processing_time:.2f} seconds")
+            
+        except Exception as e:
+            logger.error(f"Failed to generate final summary for document {document_id}: {str(e)}")
     
     async def _process_document_async(
         self, 

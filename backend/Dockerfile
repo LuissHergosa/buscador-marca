@@ -1,5 +1,5 @@
 # Use CUDA-enabled Python base image for GPU support
-FROM nvidia/cuda:11.8-runtime-ubuntu20.04
+FROM nvidia/cuda:11.8.0-runtime-ubuntu20.04
 
 # Set environment variables for better performance
 ENV DEBIAN_FRONTEND=noninteractive
@@ -11,9 +11,13 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # Install Python and system dependencies
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3.11-distutils \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y \
+    python3.9 \
+    python3.9-dev \
+    python3.9-distutils \
     python3-pip \
     build-essential \
     curl \
@@ -28,7 +32,7 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libgthread-2.0-0 \
+    libglib2.0-0 \
     libfontconfig1 \
     libavcodec-dev \
     libavformat-dev \
@@ -48,7 +52,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean
 
 # Create symbolic link for python
-RUN ln -s /usr/bin/python3.11 /usr/bin/python
+RUN ln -s /usr/bin/python3.9 /usr/bin/python
 
 # Install uv for dependency management
 RUN pip install uv
@@ -60,7 +64,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 
 # Install Python dependencies with GPU support
-RUN uv sync --extra-index-url https://download.pytorch.org/whl/cu118
+RUN uv sync
 
 # Create necessary directories
 RUN mkdir -p uploads models cache logs

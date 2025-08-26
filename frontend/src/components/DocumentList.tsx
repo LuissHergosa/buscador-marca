@@ -113,7 +113,7 @@ const DocumentList: React.FC<DocumentListProps> = ({ onDocumentSelect, filters }
             </p>
             
             <p className="text-blue-500 text-xs mb-2">
-              <span className="font-medium">Páginas:</span> {document.total_pages}
+              <span className="font-medium">Páginas procesadas:</span> {document.total_pages}
             </p>
             
             <p className="text-gray-500 text-xs mb-4">

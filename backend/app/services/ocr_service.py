@@ -45,10 +45,6 @@ class OCRService:
                 download_enabled=True,  # Download models if not present
                 # Accuracy-focused settings
                 # Recognition settings for better accuracy
-                contrast_ths=0.1,  # Lower contrast threshold for better detection
-                adjust_contrast=0.5,  # Adjust contrast for better recognition
-                canvas_size=2560,  # Canvas size for processing
-                mag_ratio=1.5,  # Magnification ratio for better detection
             )
             
             logger.info(f"OCRService initialized with GPU: {settings.use_gpu}, Languages: {settings.ocr_languages_list}")
@@ -178,12 +174,7 @@ class OCRService:
                     results = self.reader.readtext(
                         chunk_array,
                         detail=1,  # Get detailed results with coordinates
-                        # Accuracy-focused parameters
-                        contrast_ths=0.1,
-                        adjust_contrast=0.5,
-
-                        canvas_size=2560,
-                        mag_ratio=1.5,
+                        # Accuracy-foc
                     )
                     
                     # Process results

@@ -88,7 +88,39 @@ docker-compose up --build
 
 ## 🔧 Development Setup
 
-### Backend Development
+Para desarrollo con **hot reloading automático**, consulta [DEVELOPMENT.md](./DEVELOPMENT.md) para la guía completa.
+
+### 🚀 Inicio Rápido de Desarrollo (Con Hot Reloading)
+
+**Windows:**
+```bash
+# Desarrollo completo con hot reloading
+dev-start.bat
+
+# Solo frontend (desarrollo rápido)
+dev-frontend-only.bat
+
+# Detener desarrollo
+dev-stop.bat
+```
+
+**Manual:**
+```bash
+# Desarrollo completo con Docker + hot reloading
+docker-compose -f docker-compose.dev.yml up --build
+
+# Solo frontend local
+cd frontend && bun run dev
+```
+
+URLs de desarrollo:
+- **Frontend con hot reloading**: http://localhost:3000
+- **Frontend local**: http://localhost:5173
+- **Backend**: http://localhost:8000
+
+### Desarrollo Manual (Sin Docker)
+
+#### Backend Development
 ```bash
 cd backend
 
@@ -102,7 +134,7 @@ uv sync
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Frontend Development
+#### Frontend Development
 ```bash
 cd frontend
 
@@ -115,6 +147,8 @@ bun install
 # Run development server
 bun run dev
 ```
+
+> 📖 **Guía completa de desarrollo**: Ver [DEVELOPMENT.md](./DEVELOPMENT.md) para configuración detallada, troubleshooting y tips de desarrollo.
 
 ## 📖 API Documentation
 
