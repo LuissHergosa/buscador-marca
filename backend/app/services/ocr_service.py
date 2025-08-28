@@ -8,7 +8,8 @@ import asyncio
 import logging
 import time
 import gc
-from typing import List, Tuple, Dict
+import os
+from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
 import easyocr
 import cv2
@@ -257,52 +258,45 @@ class OCRService:
             logger.warning(f"Preprocessing failed, using original chunk: {str(e)}")
             return chunk
 
-    def _convert_pil_to_grayscale_opencv(self, pil_image) -> np.ndarray:
+    def load_grayscale_image_from_file(self, image_path: str) -> Optional[np.ndarray]:
         """
-        Convert PIL Image to OpenCV grayscale format.
+        Load grayscale image directly from file for memory efficiency.
         
         Args:
-            pil_image: PIL Image object (can be RGB or RGBA)
+            image_path: Path to the grayscale image file
             
         Returns:
-            OpenCV grayscale image as numpy array
+            OpenCV grayscale image as numpy array or None if failed
         """
         try:
-            # Convert PIL to OpenCV format (RGB to BGR)
-            if pil_image.mode == 'RGBA':
-                # Convert RGBA to RGB first
-                pil_rgb = pil_image.convert('RGB')
-                opencv_bgr = cv2.cvtColor(np.array(pil_rgb), cv2.COLOR_RGB2BGR)
-            elif pil_image.mode == 'RGB':
-                # Convert RGB to BGR
-                opencv_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-            else:
-                # Already grayscale or other format
-                opencv_bgr = np.array(pil_image)
+            if not os.path.exists(image_path):
+                logger.error(f"Grayscale image file not found: {image_path}")
+                return None
             
-            # Convert to grayscale using OpenCV
-            if len(opencv_bgr.shape) == 3:
-                grayscale = cv2.cvtColor(opencv_bgr, cv2.COLOR_BGR2GRAY)
-            else:
-                grayscale = opencv_bgr
+            # Load image using OpenCV in grayscale mode directly
+            grayscale_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             
-            logger.info(f"Converted PIL image to grayscale OpenCV format: {grayscale.shape}")
-            return grayscale
+            if grayscale_image is None:
+                logger.error(f"Failed to load grayscale image from: {image_path}")
+                return None
+            
+            logger.info(f"Loaded grayscale image from file: {image_path}, Shape: {grayscale_image.shape}")
+            return grayscale_image
             
         except Exception as e:
-            logger.error(f"Failed to convert PIL to OpenCV grayscale: {str(e)}")
-            raise Exception(f"Failed to convert PIL to OpenCV grayscale: {str(e)}")
+            logger.error(f"Error loading grayscale image from {image_path}: {str(e)}")
+            return None
 
-    async def extract_text_from_image(
+    async def extract_text_from_image_file(
         self, 
-        pil_image, 
+        image_path: str, 
         page_number: int
     ) -> Dict[str, any]:
         """
-        Extract all text from an image using chunk-based OCR processing with grayscale preprocessing.
+        Extract all text from a grayscale image file using memory-efficient chunk-based OCR processing.
         
         Args:
-            pil_image: PIL Image object (will be converted to grayscale OpenCV format)
+            image_path: Path to the grayscale image file
             page_number: Page number being processed
             
         Returns:
@@ -313,16 +307,29 @@ class OCRService:
         """
         try:
             start_time = time.time()
-            logger.info(f"Starting chunk-based OCR for page {page_number}")
+            logger.info(f"Starting memory-efficient chunk-based OCR for page {page_number} from file: {image_path}")
             
-            # Convert PIL image to OpenCV grayscale format for better OCR performance
-            logger.info(f"Converting PIL image to grayscale OpenCV format for page {page_number}")
-            opencv_grayscale = self._convert_pil_to_grayscale_opencv(pil_image)
-            logger.info(f"Grayscale image shape: {opencv_grayscale.shape}")
+            # Load grayscale image directly from file for memory efficiency
+            logger.info(f"Loading grayscale image from file for page {page_number}")
+            opencv_grayscale = self.load_grayscale_image_from_file(image_path)
+            
+            if opencv_grayscale is None:
+                logger.error(f"Failed to load grayscale image for page {page_number}")
+                return {
+                    'full_text': '',
+                    'text_detections': [],
+                    'processing_time': time.time() - start_time
+                }
+            
+            logger.info(f"Loaded grayscale image shape: {opencv_grayscale.shape}")
             
             # Split image into chunks
             logger.info(f"Splitting grayscale image into chunks for page {page_number}")
             chunks = self._split_image_into_chunks(opencv_grayscale)
+            
+            # Free the main image from memory immediately after chunking
+            del opencv_grayscale
+            gc.collect()
             
             if not chunks:
                 logger.warning(f"No valid chunks created for page {page_number}")
@@ -381,7 +388,7 @@ class OCRService:
             
             # Calculate processing time
             processing_time = time.time() - start_time
-            logger.info(f"Grayscale OCR completed for page {page_number}: {len(all_text_detections)} text detections, {len(full_text)} characters in {processing_time:.2f} seconds")
+            logger.info(f"Memory-efficient grayscale OCR completed for page {page_number}: {len(all_text_detections)} text detections, {len(full_text)} characters in {processing_time:.2f} seconds")
             
             if full_text:
                 logger.info(f"Sample text from grayscale OCR on page {page_number}: {full_text[:200]}...")
@@ -398,7 +405,7 @@ class OCRService:
             }
             
         except Exception as e:
-            logger.error(f"Grayscale OCR processing failed for page {page_number}: {str(e)}")
+            logger.error(f"Memory-efficient grayscale OCR processing failed for page {page_number}: {str(e)}")
             return {
                 'full_text': '',
                 'text_detections': [],

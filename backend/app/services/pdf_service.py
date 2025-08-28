@@ -1,16 +1,21 @@
 """
-PDF processing service for extracting pages and converting to images in memory.
-Optimized for performance with parallel processing and memory efficiency.
+PDF processing service for extracting pages and converting to grayscale images using temporary files.
+Optimized for memory efficiency with file-based processing and immediate cleanup.
 """
 
 import io
+import os
 import logging
 import asyncio
-from typing import List, Tuple, Optional
+import tempfile
+import shutil
+from typing import List, Tuple, Optional, Dict
 import PyPDF2
 from pdf2image import convert_from_bytes
 from PIL import Image
 import concurrent.futures
+import cv2
+import numpy as np
 
 from ..config import settings
 
@@ -23,17 +28,109 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 class PDFService:
-    """Service for PDF processing operations in memory with performance optimizations."""
+    """Service for PDF processing operations using temporary files for memory efficiency."""
     
     def __init__(self):
-        """Initialize PDF service with thread pool for parallel processing."""
-        logger.info("PDFService initialized with performance optimizations")
+        """Initialize PDF service with thread pool and temporary file management."""
+        logger.info("PDFService initialized with memory-efficient file-based processing")
         # Create thread pool for CPU-intensive operations
         self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(8, settings.max_concurrent_pages),
+            max_workers=min(4, settings.max_concurrent_pages),  # Reduced for memory efficiency
             thread_name_prefix="pdf_worker"
         )
-        logger.info(f"Thread pool initialized with {min(8, settings.max_concurrent_pages)} workers")
+        logger.info(f"Thread pool initialized with {min(4, settings.max_concurrent_pages)} workers")
+        
+        # Create base temp directory for this service
+        self.temp_base_dir = os.path.join(tempfile.gettempdir(), "buscador_marca_images")
+        os.makedirs(self.temp_base_dir, exist_ok=True)
+        logger.info(f"Temporary directory created: {self.temp_base_dir}")
+        
+        # Track active temporary directories for cleanup
+        self.active_temp_dirs = {}
+        
+        # Memory optimization settings
+        self.chunk_processing_batch_size = 2  # Process fewer pages at once to save memory
+    
+    def create_temp_directory(self, document_id: str) -> str:
+        """
+        Create a temporary directory for storing document images.
+        
+        Args:
+            document_id: Unique document identifier
+            
+        Returns:
+            Path to the temporary directory
+        """
+        temp_dir = os.path.join(self.temp_base_dir, f"doc_{document_id}")
+        os.makedirs(temp_dir, exist_ok=True)
+        self.active_temp_dirs[document_id] = temp_dir
+        logger.info(f"Created temporary directory for document {document_id}: {temp_dir}")
+        return temp_dir
+    
+    def cleanup_temp_directory(self, document_id: str) -> bool:
+        """
+        Clean up temporary directory for a document.
+        
+        Args:
+            document_id: Document identifier
+            
+        Returns:
+            True if cleanup was successful
+        """
+        try:
+            if document_id in self.active_temp_dirs:
+                temp_dir = self.active_temp_dirs[document_id]
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
+                del self.active_temp_dirs[document_id]
+                return True
+            return True
+        except Exception as e:
+            logger.error(f"Error cleaning up temporary directory for document {document_id}: {str(e)}")
+            return False
+    
+    def _convert_to_grayscale_and_save(
+        self, 
+        pil_image: Image.Image, 
+        output_path: str, 
+        page_number: int
+    ) -> bool:
+        """
+        Convert PIL image to grayscale and save as temporary file.
+        
+        Args:
+            pil_image: PIL Image object
+            output_path: Path to save the grayscale image
+            page_number: Page number (for logging)
+            
+        Returns:
+            True if conversion and save was successful
+        """
+        try:
+            logger.info(f"Converting page {page_number} to grayscale and saving to: {output_path}")
+            
+            # Convert to grayscale using PIL (more efficient than OpenCV conversion)
+            if pil_image.mode != 'L':  # L = Grayscale
+                grayscale_image = pil_image.convert('L')
+                logger.info(f"Converted page {page_number} from {pil_image.mode} to grayscale")
+            else:
+                grayscale_image = pil_image
+                logger.info(f"Page {page_number} already in grayscale")
+            
+            # Save as PNG for lossless compression
+            grayscale_image.save(output_path, 'PNG', optimize=True)
+            
+            # Free memory immediately
+            del grayscale_image
+            del pil_image
+            
+            logger.info(f"Page {page_number} saved as grayscale to: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error converting page {page_number} to grayscale: {str(e)}")
+            return False
     
     async def validate_pdf(self, file_content: bytes) -> Tuple[bool, str, int]:
         """
@@ -92,165 +189,160 @@ class PDFService:
             logger.error(f"Error reading PDF: {str(e)}")
             return False, f"Error reading PDF: {str(e)}", 0
     
-    async def extract_pages_as_images(
+    async def extract_pages_as_grayscale_files(
         self, 
         file_content: bytes,
+        temp_dir: str,
         dpi: int = None,
         start_page: int = 1,
         end_page: Optional[int] = None
-    ) -> List[Image.Image]:
+    ) -> List[str]:
         """
-        Extract pages from PDF as PIL Image objects with parallel processing.
+        Extract pages from PDF and save as grayscale image files for memory efficiency.
         
         Args:
             file_content: PDF file content as bytes
+            temp_dir: Temporary directory to save images
             dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
             start_page: First page to extract (1-based)
             end_page: Last page to extract (inclusive, None for all pages)
             
         Returns:
-            List of PIL Image objects
+            List of file paths to grayscale image files
         """
         try:
             # Use configured DPI if not specified
             if dpi is None:
                 dpi = settings.pdf_dpi
             
-            logger.info(f"Extracting PDF pages as images with DPI: {dpi}")
+            logger.info(f"Extracting PDF pages as grayscale files with DPI: {dpi}")
             logger.info(f"File size: {len(file_content)} bytes")
             logger.info(f"Page range: {start_page} to {end_page or 'end'}")
+            logger.info(f"Temporary directory: {temp_dir}")
             
             # Run conversion in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
-            images = await loop.run_in_executor(
+            image_files = await loop.run_in_executor(
                 self.executor,
-                self._extract_pages_sync,
+                self._extract_pages_as_grayscale_files_sync,
                 file_content,
+                temp_dir,
                 dpi,
                 start_page,
                 end_page
             )
             
-            logger.info(f"Successfully extracted {len(images)} pages as images")
-            
-            # Log image details for debugging
-            for i, image in enumerate(images):
-                logger.info(f"Page {start_page + i}: Size={image.size}, Mode={image.mode}")
-            
-            return images
+            logger.info(f"Successfully extracted and saved {len(image_files)} pages as grayscale files")
+            return image_files
             
         except Exception as e:
-            logger.error(f"Failed to extract pages as images: {str(e)}")
+            logger.error(f"Failed to extract pages as grayscale files: {str(e)}")
             logger.error(f"File size: {len(file_content)} bytes, DPI: {dpi}")
-            raise Exception(f"Failed to extract pages as images: {str(e)}")
+            raise Exception(f"Failed to extract pages as grayscale files: {str(e)}")
     
-    def _extract_pages_sync(
+    def _extract_pages_as_grayscale_files_sync(
         self, 
         file_content: bytes, 
+        temp_dir: str,
         dpi: int, 
         start_page: int, 
         end_page: Optional[int]
-    ) -> List[Image.Image]:
-        """Synchronous page extraction for thread pool execution."""
+    ) -> List[str]:
+        """Synchronous page extraction with immediate conversion to grayscale files."""
         try:
-            # Convert PDF pages to images in memory with optimized settings
+            logger.info(f"Starting synchronous extraction and grayscale conversion")
+            
+            # Convert PDF pages to images in memory (temporary)
             images = convert_from_bytes(
                 file_content,
                 dpi=dpi,
                 fmt='PNG',
                 first_page=start_page,
                 last_page=end_page,
-                # Use multiple threads for conversion
-                thread_count=min(4, settings.max_concurrent_pages)
+                # Use fewer threads for memory efficiency
+                thread_count=min(2, settings.max_concurrent_pages)
             )
             
-            return images
+            logger.info(f"Extracted {len(images)} pages, converting to grayscale files")
+            
+            # Convert each image to grayscale and save immediately
+            image_files = []
+            for i, pil_image in enumerate(images):
+                page_number = start_page + i
+                filename = f"page_{page_number:04d}.png"
+                output_path = os.path.join(temp_dir, filename)
+                
+                # Convert and save (this method frees memory immediately)
+                success = self._convert_to_grayscale_and_save(pil_image, output_path, page_number)
+                
+                if success:
+                    image_files.append(output_path)
+                    logger.info(f"Page {page_number} converted and saved: {output_path}")
+                else:
+                    logger.error(f"Failed to convert and save page {page_number}")
+            
+            # Clear the images list to free memory
+            del images
+            
+            logger.info(f"Completed grayscale conversion: {len(image_files)} files created")
+            return image_files
             
         except Exception as e:
-            logger.error(f"Failed to extract pages synchronously: {str(e)}")
+            logger.error(f"Failed to extract pages as grayscale files synchronously: {str(e)}")
             raise e
     
-    async def optimize_image(self, image: Image.Image, max_size: int = None) -> Image.Image:
+    def load_grayscale_image_from_file(self, image_path: str) -> Optional[np.ndarray]:
         """
-        Optimize image for AI processing in memory while preserving text clarity.
-        Uses parallel processing for optimization.
+        Load grayscale image from file for OCR processing.
         
         Args:
-            image: PIL Image object
-            max_size: Maximum dimension size (defaults to settings.max_image_size)
+            image_path: Path to the grayscale image file
             
         Returns:
-            Optimized PIL Image object
+            OpenCV grayscale image as numpy array or None if failed
         """
         try:
-            # Use configured max size if not specified
-            if max_size is None:
-                max_size = settings.max_image_size
+            if not os.path.exists(image_path):
+                logger.error(f"Image file not found: {image_path}")
+                return None
             
-            original_size = image.size
-            logger.info(f"Optimizing image: Original size={original_size}, Max size={max_size}")
+            # Load image using OpenCV in grayscale mode directly
+            grayscale_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             
-            # Run optimization in thread pool
-            loop = asyncio.get_event_loop()
-            optimized_image = await loop.run_in_executor(
-                self.executor,
-                self._optimize_image_sync,
-                image,
-                max_size
-            )
+            if grayscale_image is None:
+                logger.error(f"Failed to load image from: {image_path}")
+                return None
             
-            return optimized_image
+            logger.info(f"Loaded grayscale image from file: {image_path}, Shape: {grayscale_image.shape}")
+            return grayscale_image
             
         except Exception as e:
-            logger.error(f"Failed to optimize image: {str(e)}")
-            logger.error(f"Image size: {image.size}, Mode: {image.mode}")
-            raise Exception(f"Failed to optimize image: {str(e)}")
+            logger.error(f"Error loading grayscale image from {image_path}: {str(e)}")
+            return None
     
-    def _optimize_image_sync(self, image: Image.Image, max_size: int) -> Image.Image:
-        """Synchronous image optimization for thread pool execution."""
-        try:
-            # Convert to RGB if necessary
-            if image.mode != 'RGB':
-                logger.info(f"Converting image from {image.mode} to RGB")
-                image = image.convert('RGB')
-            
-            # Only resize if image is extremely large to preserve text clarity
-            # For architectural plans, we want to maintain high resolution for text detection
-            if max(image.size) > max_size:
-                logger.info(f"Resizing image from {image.size} to max {max_size}")
-                # Use high-quality resampling for better text preservation
-                image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-                logger.info(f"Image resized to: {image.size}")
-            else:
-                logger.info(f"Image size {image.size} is within limits, no resizing needed")
-            
-            return image
-            
-        except Exception as e:
-            logger.error(f"Failed to optimize image synchronously: {str(e)}")
-            raise e
-    
-    async def process_pdf_parallel(
+    async def process_pdf_with_temp_files(
         self, 
         file_content: bytes, 
+        document_id: str,
         filename: str,
         dpi: int = None,
-        batch_size: int = 5
-    ) -> Tuple[List[Image.Image], int]:
+        batch_size: int = 3
+    ) -> Tuple[List[str], int, str]:
         """
-        Process PDF file with parallel processing for better performance.
+        Process PDF file using temporary files for memory efficiency.
         
         Args:
             file_content: PDF file content
+            document_id: Document identifier for temp directory
             filename: Original filename (for logging purposes)
             dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
             batch_size: Number of pages to process in parallel batches
             
         Returns:
-            Tuple of (optimized_images, total_pages)
+            Tuple of (image_file_paths, total_pages, temp_directory)
         """
         try:
-            logger.info(f"Starting parallel PDF processing: {filename}")
+            logger.info(f"Starting memory-efficient PDF processing: {filename}")
             logger.info(f"File size: {len(file_content)} bytes")
             logger.info(f"Batch size: {batch_size}")
             
@@ -262,61 +354,65 @@ class PDFService:
             
             logger.info(f"PDF validation successful: {total_pages} pages")
             
-            # Process pages in parallel batches
-            all_images = []
+            # Create temporary directory for this document
+            temp_dir = self.create_temp_directory(document_id)
+            
+            # Process pages in smaller batches for memory efficiency
+            all_image_files = []
             
             for batch_start in range(1, total_pages + 1, batch_size):
                 batch_end = min(batch_start + batch_size - 1, total_pages)
                 logger.info(f"Processing batch: pages {batch_start} to {batch_end}")
                 
-                # Extract batch of pages
-                batch_images = await self.extract_pages_as_images(
-                    file_content, dpi, batch_start, batch_end
+                # Extract batch of pages and convert to grayscale files immediately
+                batch_image_files = await self.extract_pages_as_grayscale_files(
+                    file_content, temp_dir, dpi, batch_start, batch_end
                 )
                 
-                # Optimize batch images in parallel
-                optimization_tasks = []
-                for image in batch_images:
-                    task = self.optimize_image(image)
-                    optimization_tasks.append(task)
-                
-                # Wait for all optimizations to complete
-                optimized_batch = await asyncio.gather(*optimization_tasks)
-                all_images.extend(optimized_batch)
-                
-                logger.info(f"Batch {batch_start}-{batch_end} completed: {len(optimized_batch)} images")
+                all_image_files.extend(batch_image_files)
+                logger.info(f"Batch {batch_start}-{batch_end} completed: {len(batch_image_files)} grayscale files created")
             
-            logger.info(f"Parallel PDF processing completed: {len(all_images)} optimized images")
-            return all_images, total_pages
+            logger.info(f"Memory-efficient PDF processing completed: {len(all_image_files)} grayscale files in {temp_dir}")
+            return all_image_files, total_pages, temp_dir
             
         except Exception as e:
-            logger.error(f"Parallel PDF processing failed: {str(e)}")
+            logger.error(f"Memory-efficient PDF processing failed: {str(e)}")
+            # Cleanup temp directory if created
+            if document_id in self.active_temp_dirs:
+                self.cleanup_temp_directory(document_id)
             raise e
     
     async def process_pdf(
         self, 
         file_content: bytes, 
+        document_id: str,
         filename: str,
         dpi: int = None
-    ) -> Tuple[List[Image.Image], int]:
+    ) -> Tuple[List[str], int, str]:
         """
-        Process PDF file in memory: validate and extract pages as optimized images.
-        Uses parallel processing for better performance.
+        Process PDF file with memory-efficient temporary files.
         
         Args:
             file_content: PDF file content
+            document_id: Document identifier
             filename: Original filename (for logging purposes)
             dpi: Resolution for image conversion (defaults to settings.pdf_dpi)
             
         Returns:
-            Tuple of (optimized_images, total_pages)
+            Tuple of (image_file_paths, total_pages, temp_directory)
         """
-        # Use parallel processing for better performance
-        return await self.process_pdf_parallel(file_content, filename, dpi)
+        # Use memory-efficient processing with temporary files
+        return await self.process_pdf_with_temp_files(file_content, document_id, filename, dpi)
     
     def __del__(self):
-        """Cleanup thread pool on deletion."""
+        """Cleanup thread pool and temporary directories on deletion."""
         try:
+            # Cleanup all active temporary directories
+            if hasattr(self, 'active_temp_dirs'):
+                for document_id in list(self.active_temp_dirs.keys()):
+                    self.cleanup_temp_directory(document_id)
+            
+            # Cleanup thread pool executor
             if hasattr(self, 'executor') and self.executor:
                 logger.info("Shutting down PDF service thread pool executor")
                 # Use shutdown with wait=False to avoid blocking during cleanup

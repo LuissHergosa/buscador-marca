@@ -243,22 +243,22 @@ class BrandDetectionService:
                 logger.error(f"Text analysis failed for page {page_number}: {str(e)}")
                 return []
     
-    async def detect_brands_in_image(
+    async def detect_brands_in_image_file(
         self, 
-        image, 
+        image_path: str, 
         page_number: int
     ) -> BrandDetectionCreate:
         """
-        Detect brands in a single image using optimized OCR + LLM pipeline.
+        Detect brands in a grayscale image file using memory-efficient OCR + LLM pipeline.
         
         Process:
-        1. Split image into chunks for detailed OCR analysis
-        2. Extract text from all chunks concurrently
-        3. Aggregate all extracted text from the page
-        4. Analyze the complete page text with LLM for brand detection
+        1. Load grayscale image from file for OCR analysis
+        2. Extract text from all chunks using memory-efficient processing
+        3. Analyze the complete page text with LLM for brand detection
+        4. Free all memory immediately after processing
         
         Args:
-            image: PIL Image object (will be converted to grayscale OpenCV in OCR service)
+            image_path: Path to the grayscale image file
             page_number: Page number being analyzed
             
         Returns:
@@ -266,22 +266,18 @@ class BrandDetectionService:
         """
         try:
             start_time = time.time()
-            logger.info(f"Starting optimized OCR + LLM brand detection for page {page_number}")
-            logger.info(f"Image size: {image.size}, Mode: {image.mode} (will be converted to grayscale)")
+            logger.info(f"Starting memory-efficient OCR + LLM brand detection for page {page_number}")
+            logger.info(f"Image file: {image_path}")
             
-            # Step 1: Extract text using chunk-based OCR
-            logger.info(f"Step 1: Extracting text using chunk-based OCR for page {page_number}")
-            ocr_result = await self.ocr_service.extract_text_from_image(image, page_number)
+            # Step 1: Extract text using memory-efficient chunk-based OCR
+            logger.info(f"Step 1: Extracting text using memory-efficient OCR for page {page_number}")
+            ocr_result = await self.ocr_service.extract_text_from_image_file(image_path, page_number)
             
             extracted_text = ocr_result['full_text']
             text_detections = ocr_result['text_detections']
             ocr_processing_time = ocr_result['processing_time']
             
-            logger.info(f"OCR completed for page {page_number}: {len(extracted_text)} characters extracted from {len(text_detections)} text detections in {ocr_processing_time:.2f} seconds")
-            
-            # Clear image from memory after OCR to prevent accumulation
-            del image
-            gc.collect()
+            logger.info(f"Memory-efficient OCR completed for page {page_number}: {len(extracted_text)} characters extracted from {len(text_detections)} text detections in {ocr_processing_time:.2f} seconds")
             
             if not extracted_text or extracted_text.strip() == "":
                 logger.warning(f"No text extracted from page {page_number} - no brands to detect")
@@ -296,7 +292,7 @@ class BrandDetectionService:
             
             detected_brands = await self.detect_brands_from_text(extracted_text, page_number)
             
-            # Clear large text variables to free memory
+            # Clear large text variables to free memory immediately
             del extracted_text
             del text_detections
             del ocr_result
@@ -304,7 +300,7 @@ class BrandDetectionService:
             
             # Calculate total processing time
             total_processing_time = time.time() - start_time
-            logger.info(f"OCR + LLM brand detection completed for page {page_number}: {len(detected_brands)} brands found in {total_processing_time:.2f} seconds")
+            logger.info(f"Memory-efficient OCR + LLM brand detection completed for page {page_number}: {len(detected_brands)} brands found in {total_processing_time:.2f} seconds")
             
             if detected_brands:
                 logger.info(f"Brands detected on page {page_number}: {detected_brands}")
@@ -317,39 +313,39 @@ class BrandDetectionService:
             )
             
         except Exception as e:
-            logger.error(f"OCR + LLM brand detection failed for page {page_number}: {str(e)}")
+            logger.error(f"Memory-efficient OCR + LLM brand detection failed for page {page_number}: {str(e)}")
             # Return empty result instead of raising exception
             return BrandDetectionCreate(
                 page_number=page_number,
                 brands_detected=[]
             )
     
-    async def detect_brands_in_multiple_images(
+    async def detect_brands_in_multiple_image_files(
         self, 
-        images: List
+        image_paths: List[str]
     ) -> List[BrandDetectionCreate]:
         """
-        Detect brands in multiple images with optimized parallel processing.
+        Detect brands in multiple grayscale image files with memory-efficient parallel processing.
         
         Args:
-            images: List of PIL Image objects (will be converted to grayscale OpenCV in OCR service)
+            image_paths: List of paths to grayscale image files
             
         Returns:
             List of BrandDetectionCreate objects
         """
         try:
-            logger.info(f"Starting optimized brand detection for {len(images)} images")
+            logger.info(f"Starting memory-efficient brand detection for {len(image_paths)} image files")
             
             # Create tasks for concurrent processing with better error handling
             tasks = []
-            for i, image in enumerate(images):
+            for i, image_path in enumerate(image_paths):
                 page_number = i + 1
-                logger.info(f"Creating task for page {page_number}")
-                task = self.detect_brands_in_image(image, page_number)
+                logger.info(f"Creating task for page {page_number}: {image_path}")
+                task = self.detect_brands_in_image_file(image_path, page_number)
                 tasks.append(task)
             
             # Execute tasks concurrently with improved error handling
-            logger.info(f"Executing {len(tasks)} tasks concurrently")
+            logger.info(f"Executing {len(tasks)} memory-efficient tasks concurrently")
             results = await asyncio.gather(
                 *tasks,
                 return_exceptions=True
@@ -359,7 +355,7 @@ class BrandDetectionService:
             valid_results = []
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Error processing page {i+1}: {str(result)}")
+                    logger.error(f"Error processing page {i+1} from {image_paths[i]}: {str(result)}")
                     # Create empty result for failed pages
                     valid_results.append(BrandDetectionCreate(
                         page_number=i+1,
@@ -368,12 +364,12 @@ class BrandDetectionService:
                 else:
                     valid_results.append(result)
             
-            logger.info(f"Brand detection completed: {len(valid_results)} results, {len([r for r in results if isinstance(r, Exception)])} errors")
+            logger.info(f"Memory-efficient brand detection completed: {len(valid_results)} results, {len([r for r in results if isinstance(r, Exception)])} errors")
             return valid_results
             
         except Exception as e:
-            logger.error(f"Failed to process multiple images: {str(e)}")
-            raise Exception(f"Failed to process multiple images: {str(e)}")
+            logger.error(f"Failed to process multiple image files: {str(e)}")
+            raise Exception(f"Failed to process multiple image files: {str(e)}")
 
 
 # Global brand detection service instance
