@@ -9,4 +9,15 @@ export default defineConfig({
       "@": "/src",
     },
   },
+  server: {
+    host: '0.0.0.0', // Allow external connections (Docker)
+    port: 5173,
+    watch: {
+      usePolling: true, // Enable polling for Docker on Windows
+    },
+    hmr: {
+      port: 3000, // Hot Module Replacement port should match Docker port mapping
+      host: 'localhost'
+    },
+  },
 })

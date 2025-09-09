@@ -4,7 +4,7 @@ import { Document, ProcessingStatus, BrandReviewUpdate } from '@/types';
 // Function to get the base URL dynamically
 const getBaseURL = () => {
   // If VITE_API_URL is set, use it
-  if (import.meta.env.VITE_API_URL) {
+  if (import.meta.env?.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
   
@@ -94,6 +94,17 @@ export const documentApi = {
       `/api/documents/${reviewUpdate.document_id}/brands/review`,
       reviewUpdate
     );
+    return response.data;
+  },
+
+  // Download Excel export
+  downloadExcel: async (documentId: string): Promise<Blob> => {
+    const response = await api.get(`/api/documents/${documentId}/export/excel`, {
+      responseType: 'blob',
+      headers: {
+        'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }
+    });
     return response.data;
   },
 };

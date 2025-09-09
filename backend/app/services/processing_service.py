@@ -7,10 +7,8 @@ import asyncio
 import logging
 import time
 from typing import List, Optional
-from datetime import datetime
 
 from ..models.document import Document, DocumentCreate, DocumentUpdate
-from ..models.brand_detection import BrandDetectionCreate
 from ..models.processing_status import ProcessingStatus
 from .firebase_service import firebase_service
 from .pdf_service import pdf_service
@@ -50,30 +48,37 @@ class ProcessingService:
             Document object with processing results
         """
         try:
-            logger.info(f"Starting optimized document processing: {filename}")
+            logger.info(f"Starting memory-efficient document processing: {filename}")
             logger.info(f"File size: {len(file_content)} bytes")
             
-            # Step 1: Process PDF and extract images in memory with parallel processing
-            logger.info(f"Processing PDF with parallel optimization: {filename}")
-            images, total_pages = await pdf_service.process_pdf(
-                file_content, filename
-            )
-            
-            logger.info(f"PDF processing completed: {total_pages} pages, {len(images)} images")
-            
-            # Step 2: Create document record in Firebase
+            # Step 1: Create document record in Firebase first to get the document ID
             logger.info("Creating document record in Firebase")
             document_data = DocumentCreate(
                 filename=filename,
-                total_pages=total_pages
+                total_pages=0  # Will be updated after PDF processing
             )
             document = await firebase_service.create_document(document_data)
             logger.info(f"Document created in Firebase: {document.id}")
             
-            # Step 3: Start async processing with batch optimization
-            logger.info("Starting async brand detection processing with batch optimization")
+            # Step 2: Process PDF and extract images as grayscale files for memory efficiency
+            logger.info(f"Processing PDF with memory-efficient optimization: {filename}")
+            image_files, total_pages, temp_dir = await pdf_service.process_pdf(
+                file_content, document.id, filename
+            )
+            
+            logger.info(f"PDF processing completed: {total_pages} pages, {len(image_files)} grayscale image files created in {temp_dir}")
+            
+            # Step 3: Update document with total pages
+            logger.info("Updating document with total pages")
+            await firebase_service.update_document(
+                document.id, 
+                DocumentUpdate(total_pages=total_pages)
+            )
+            
+            # Step 4: Start async processing with memory-efficient batch optimization
+            logger.info("Starting async brand detection processing with memory-efficient batch optimization")
             asyncio.create_task(
-                self._process_document_async_optimized(document.id, images, total_pages)
+                self._process_document_async_optimized(document.id, image_files, temp_dir, total_pages)
             )
             
             logger.info(f"Document processing initiated successfully: {document.id}")
@@ -102,13 +107,13 @@ class ProcessingService:
             logger.info(f"Starting async document processing: {filename}")
             logger.info(f"File size: {len(file_content)} bytes")
             
-            # Step 1: Process PDF and extract images in memory with parallel processing
-            logger.info(f"Processing PDF with parallel optimization: {filename}")
-            images, total_pages = await pdf_service.process_pdf(
-                file_content, filename
+            # Step 1: Process PDF and extract images as grayscale files for memory efficiency
+            logger.info(f"Processing PDF with memory-efficient optimization: {filename}")
+            image_files, total_pages, temp_dir = await pdf_service.process_pdf(
+                file_content, document_id, filename
             )
             
-            logger.info(f"PDF processing completed: {total_pages} pages, {len(images)} images")
+            logger.info(f"PDF processing completed: {total_pages} pages, {len(image_files)} grayscale image files created in {temp_dir}")
             
             # Update document with total pages
             await firebase_service.update_document(
@@ -116,33 +121,39 @@ class ProcessingService:
                 DocumentUpdate(total_pages=total_pages)
             )
             
-            # Step 2: Start async processing with batch optimization
-            logger.info("Starting async brand detection processing with batch optimization")
-            await self._process_document_async_optimized(document_id, images, total_pages)
+            # Step 2: Start async processing with memory-efficient batch optimization
+            logger.info("Starting async brand detection processing with memory-efficient batch optimization")
+            await self._process_document_async_optimized(document_id, image_files, temp_dir, total_pages)
             
             logger.info(f"Document processing completed successfully: {document_id}")
             
         except Exception as e:
             logger.error(f"Async document processing failed: {str(e)}")
             # Update document status to failed
-            await firebase_service.update_document(
-                document_id, 
-                DocumentUpdate(status="failed")
-            )
+            try:
+                await firebase_service.update_document(
+                    document_id, 
+                    DocumentUpdate(status="failed")
+                )
+                logger.info(f"Document {document_id} status updated to 'failed' due to processing error")
+            except Exception as update_error:
+                logger.error(f"Failed to update document {document_id} status: {str(update_error)}")
             raise e
     
     async def _process_document_async_optimized(
         self, 
         document_id: str, 
-        images: List, 
+        image_files: List[str], 
+        temp_dir: str,
         total_pages: int
     ):
         """
-        Process document asynchronously with batch processing for better performance.
+        Process document asynchronously with memory-efficient batch processing.
         
         Args:
             document_id: Document ID
-            images: List of image objects
+            image_files: List of paths to grayscale image files
+            temp_dir: Temporary directory containing the images
             total_pages: Total number of pages
         """
         try:
@@ -161,25 +172,29 @@ class ProcessingService:
             
             logger.info(f"Processing tracking initialized for document: {document_id}")
             
-            # Process pages in batches for better performance
-            for batch_start in range(0, len(images), self.batch_size):
-                batch_end = min(batch_start + self.batch_size, len(images))
-                batch_images = images[batch_start:batch_end]
+            # Process pages in batches for memory efficiency
+            for batch_start in range(0, len(image_files), self.batch_size):
+                batch_end = min(batch_start + self.batch_size, len(image_files))
+                batch_image_files = image_files[batch_start:batch_end]
                 batch_page_numbers = list(range(batch_start + 1, batch_end + 1))
                 
-                logger.info(f"Processing batch {batch_start // self.batch_size + 1}: pages {batch_start + 1} to {batch_end}")
+                logger.info(f"Processing memory-efficient batch {batch_start // self.batch_size + 1}: pages {batch_start + 1} to {batch_end}")
                 
                 # Update batch tracking
                 self.active_processes[document_id]["current_batch"] = batch_start // self.batch_size + 1
                 
-                # Process batch in parallel
-                await self._process_batch_parallel(
+                # Process batch in parallel with memory efficiency
+                await self._process_batch_parallel_files(
                     document_id, 
-                    batch_images, 
+                    batch_image_files, 
                     batch_page_numbers
                 )
                 
-                logger.info(f"Batch {batch_start // self.batch_size + 1} completed")
+                logger.info(f"Memory-efficient batch {batch_start // self.batch_size + 1} completed")
+            
+            # Generate final document summary
+            logger.info(f"Generating final document summary for document {document_id}")
+            await self._generate_final_document_summary(document_id, total_pages)
             
             # Update document status
             final_status = "completed"
@@ -197,12 +212,16 @@ class ProcessingService:
                 DocumentUpdate(status=final_status)
             )
             
+            # Cleanup temporary directory
+            logger.info(f"Cleaning up temporary directory for document {document_id}: {temp_dir}")
+            pdf_service.cleanup_temp_directory(document_id)
+            
             # Cleanup tracking
             if document_id in self.active_processes:
                 total_processing_time = time.time() - self.active_processes[document_id]["start_time"]
                 del self.active_processes[document_id]
                 logger.info(f"Processing tracking cleaned up for document {document_id}")
-                logger.info(f"Completed processing document: {document_id} in {total_processing_time:.2f} seconds")
+                logger.info(f"Completed memory-efficient processing document: {document_id} in {total_processing_time:.2f} seconds")
             
         except Exception as e:
             logger.error(f"Error in optimized async processing for document {document_id}: {str(e)}")
@@ -214,10 +233,67 @@ class ProcessingService:
                 DocumentUpdate(status="failed")
             )
             
+            # Cleanup temporary directory even on failure
+            logger.info(f"Cleaning up temporary directory for failed document {document_id}: {temp_dir}")
+            pdf_service.cleanup_temp_directory(document_id)
+            
             # Cleanup tracking
             if document_id in self.active_processes:
                 del self.active_processes[document_id]
                 logger.info(f"Processing tracking cleaned up for failed document {document_id}")
+    
+    async def _process_batch_parallel_files(
+        self, 
+        document_id: str, 
+        batch_image_files: List[str], 
+        batch_page_numbers: List[int]
+    ):
+        """
+        Process a batch of image files in parallel for memory efficiency.
+        
+        Args:
+            document_id: Document ID
+            batch_image_files: List of paths to grayscale image files in the batch
+            batch_page_numbers: List of page numbers in the batch
+        """
+        try:
+            logger.info(f"Processing batch with {len(batch_image_files)} grayscale image files in parallel")
+            
+            # Create tasks for parallel processing
+            tasks = []
+            for image_file, page_number in zip(batch_image_files, batch_page_numbers):
+                task = self._process_single_page_file(document_id, image_file, page_number)
+                tasks.append(task)
+            
+            # Execute batch tasks in parallel
+            logger.info(f"Executing {len(tasks)} memory-efficient batch tasks in parallel")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results
+            for i, result in enumerate(results):
+                page_number = batch_page_numbers[i]
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing page {page_number} in batch: {str(result)}")
+                    # Update page status to failed
+                    try:
+                        await firebase_service.update_page_status(
+                            document_id, page_number, "failed", str(result)
+                        )
+                    except Exception as update_error:
+                        logger.error(f"Failed to update page {page_number} status: {str(update_error)}")
+                    # Update tracking
+                    self.active_processes[document_id]["failed_pages"] += 1
+                else:
+                    logger.info(f"Page {page_number} in batch completed successfully")
+                    # Update tracking
+                    self.active_processes[document_id]["processed_pages"] += 1
+            
+            logger.info(f"Memory-efficient batch processing completed: {len([r for r in results if not isinstance(r, Exception)])} successful, {len([r for r in results if isinstance(r, Exception)])} failed")
+            
+        except Exception as e:
+            logger.error(f"Error processing batch with files for document {document_id}: {str(e)}")
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Batch processing error will not crash the application: {str(e)}")
     
     async def _process_batch_parallel(
         self, 
@@ -252,9 +328,12 @@ class ProcessingService:
                 if isinstance(result, Exception):
                     logger.error(f"Error processing page {page_number} in batch: {str(result)}")
                     # Update page status to failed
-                    await firebase_service.update_page_status(
-                        document_id, page_number, "failed", str(result)
-                    )
+                    try:
+                        await firebase_service.update_page_status(
+                            document_id, page_number, "failed", str(result)
+                        )
+                    except Exception as update_error:
+                        logger.error(f"Failed to update page {page_number} status: {str(update_error)}")
                     # Update tracking
                     self.active_processes[document_id]["failed_pages"] += 1
                 else:
@@ -266,6 +345,55 @@ class ProcessingService:
             
         except Exception as e:
             logger.error(f"Error processing batch for document {document_id}: {str(e)}")
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Batch processing error will not crash the application: {str(e)}")
+    
+    async def _process_single_page_file(
+        self, 
+        document_id: str, 
+        image_file: str, 
+        page_number: int
+    ):
+        """
+        Process a single page from a grayscale image file for memory efficiency.
+        
+        Args:
+            document_id: Document ID
+            image_file: Path to the grayscale image file
+            page_number: Page number
+        """
+        try:
+            # Update page status to processing
+            logger.info(f"Updating page {page_number} status to 'processing' (file: {image_file})")
+            try:
+                await firebase_service.update_page_status(
+                    document_id, page_number, "processing"
+                )
+            except Exception as update_error:
+                logger.error(f"Failed to update page {page_number} status to 'processing': {str(update_error)}")
+            
+            # Detect brands in image file using memory-efficient processing
+            logger.info(f"Starting memory-efficient brand detection for page {page_number}")
+            result = await brand_detection_service.detect_brands_in_image_file(
+                image_file, page_number
+            )
+            
+            # Save result to Firebase
+            logger.info(f"Saving brand detection result for page {page_number}")
+            try:
+                await firebase_service.save_brand_detection_result(
+                    document_id, page_number, result, 0  # Processing time will be calculated by the service
+                )
+            except Exception as save_error:
+                logger.error(f"Failed to save brand detection result for page {page_number}: {str(save_error)}")
+            
+            logger.info(f"Page {page_number} completed successfully with memory-efficient processing")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing page {page_number} from file {image_file} for document {document_id}: {str(e)}")
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Page processing error will not crash the application: {str(e)}")
             raise e
     
     async def _process_single_page(
@@ -285,9 +413,12 @@ class ProcessingService:
         try:
             # Update page status to processing
             logger.info(f"Updating page {page_number} status to 'processing'")
-            await firebase_service.update_page_status(
-                document_id, page_number, "processing"
-            )
+            try:
+                await firebase_service.update_page_status(
+                    document_id, page_number, "processing"
+                )
+            except Exception as update_error:
+                logger.error(f"Failed to update page {page_number} status to 'processing': {str(update_error)}")
             
             # Detect brands in image
             logger.info(f"Starting brand detection for page {page_number}")
@@ -297,16 +428,85 @@ class ProcessingService:
             
             # Save result to Firebase
             logger.info(f"Saving brand detection result for page {page_number}")
-            await firebase_service.save_brand_detection_result(
-                document_id, page_number, result, 0  # Processing time will be calculated by the service
-            )
+            try:
+                await firebase_service.save_brand_detection_result(
+                    document_id, page_number, result, 0  # Processing time will be calculated by the service
+                )
+            except Exception as save_error:
+                logger.error(f"Failed to save brand detection result for page {page_number}: {str(save_error)}")
             
             logger.info(f"Page {page_number} completed successfully")
             return result
             
         except Exception as e:
             logger.error(f"Error processing page {page_number} for document {document_id}: {str(e)}")
+            # Don't re-raise the exception to prevent application crash
+            logger.error(f"Page processing error will not crash the application: {str(e)}")
             raise e
+    
+    async def _generate_final_document_summary(self, document_id: str, total_pages: int):
+        """
+        Generate final document summary with all detected brands and statistics.
+        
+        Args:
+            document_id: Document ID
+            total_pages: Total number of pages processed
+        """
+        try:
+            logger.info(f"Generating final summary for document {document_id}")
+            
+            # Get the document with all results
+            document = await firebase_service.get_document(document_id)
+            if not document:
+                logger.error(f"Document {document_id} not found for summary generation")
+                return
+            
+            # Collect all unique brands from all pages
+            all_brands = set()
+            successful_pages = 0
+            failed_pages = 0
+            total_processing_time = 0
+            
+            for result in document.results:
+                if result.status == "completed":
+                    successful_pages += 1
+                    all_brands.update(result.brands_detected)
+                    total_processing_time += result.processing_time
+                else:
+                    failed_pages += 1
+            
+            # Create document summary
+            summary = {
+                "total_pages": total_pages,
+                "successful_pages": successful_pages,
+                "failed_pages": failed_pages,
+                "total_unique_brands": len(all_brands),
+                "all_detected_brands": sorted(list(all_brands)),
+                "total_processing_time": total_processing_time,
+                "brands_by_page": {
+                    str(result.page_number): {
+                        "brands": result.brands_detected,
+                        "brand_count": len(result.brands_detected),
+                        "processing_time": result.processing_time,
+                        "status": result.status
+                    }
+                    for result in document.results
+                }
+            }
+            
+            # Save summary to Firebase
+            await firebase_service.save_document_summary(document_id, summary)
+            
+            logger.info(f"Final summary generated for document {document_id}:")
+            logger.info(f"  - Total pages: {total_pages}")
+            logger.info(f"  - Successful pages: {successful_pages}")
+            logger.info(f"  - Failed pages: {failed_pages}")
+            logger.info(f"  - Total unique brands detected: {len(all_brands)}")
+            logger.info(f"  - Brands found: {sorted(list(all_brands))}")
+            logger.info(f"  - Total processing time: {total_processing_time:.2f} seconds")
+            
+        except Exception as e:
+            logger.error(f"Failed to generate final summary for document {document_id}: {str(e)}")
     
     async def _process_document_async(
         self, 

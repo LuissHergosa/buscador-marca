@@ -30,6 +30,7 @@ class Document(DocumentBase):
     upload_date: datetime = Field(..., description="Date when document was uploaded")
     status: str = Field(..., description="Processing status: processing, completed, failed")
     results: Optional[List["BrandDetection"]] = Field(default=None, description="Brand detection results")
+    summary: Optional[dict] = Field(default=None, description="Document processing summary with statistics")
     
     class Config:
         from_attributes = True

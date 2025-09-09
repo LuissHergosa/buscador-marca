@@ -1,22 +1,22 @@
 """
-Brand detection service using Langchain and Google Gemini 2.5.
+Brand detection service using OCR + LLM pipeline.
+First extracts text using EasyOCR, then analyzes text with Google Gemini 2.5.
 Optimized for performance with parallel processing and connection pooling.
 """
 
-import base64
-import io
 import json
 import logging
 import re
 import time
 import asyncio
-from typing import List, Optional, Tuple
+import gc
+from typing import List
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage
-from PIL import Image
 
 from ..config import settings
 from ..models.brand_detection import BrandDetectionCreate
+from .ocr_service import OCRService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,11 +24,14 @@ logger = logging.getLogger(__name__)
 
 
 class BrandDetectionService:
-    """Service for brand detection using Google Gemini 2.5 with performance optimizations."""
+    """Service for brand detection using OCR + LLM pipeline with performance optimizations."""
     
     def __init__(self):
-        """Initialize brand detection service with optimized settings."""
-        logger.info("Initializing BrandDetectionService with Gemini 2.5 and performance optimizations")
+        """Initialize brand detection service with OCR + LLM pipeline."""
+        logger.info("Initializing BrandDetectionService with OCR + LLM pipeline")
+        
+        # Initialize OCR service
+        self.ocr_service = OCRService()
         
         # Create multiple LLM instances for parallel processing
         self.llm_instances = []
@@ -46,309 +49,77 @@ class BrandDetectionService:
             )
             self.llm_instances.append(llm)
         
-        logger.info(f"BrandDetectionService initialized with {len(self.llm_instances)} LLM instances")
+        logger.info(f"BrandDetectionService initialized with {len(self.llm_instances)} LLM instances and OCR service")
         
         # Create semaphore for rate limiting
         self.semaphore = asyncio.Semaphore(settings.max_concurrent_pages)
-        
-        # Chunk analysis configuration - 6 chunks total
-        self.num_chunks = 6  # Fixed number of chunks
-        self.chunk_overlap = 100  # 100 pixels overlap between chunks for better coverage
     
-    def _encode_image_to_base64(self, image) -> str:
+    def _create_text_analysis_prompt(self, page_number: int, extracted_text: str) -> str:
         """
-        Encode PIL Image to base64 string with optimized quality settings.
-        
-        Args:
-            image: PIL Image object
-            
-        Returns:
-            Base64 encoded image string
-        """
-        try:
-            logger.info(f"Encoding image to base64: Size={image.size}, Mode={image.mode}")
-            
-            # Convert PIL Image to bytes with optimized settings
-            img_buffer = io.BytesIO()
-            
-            # Use optimized settings for better performance while maintaining quality
-            # PNG format preserves text clarity better than JPEG
-            image.save(
-                img_buffer, 
-                format='PNG',
-                optimize=True,  # Enable optimization for smaller file size
-                quality=settings.image_quality,
-                compress_level=6  # Balanced compression
-            )
-            
-            img_bytes = img_buffer.getvalue()
-            encoded_size = len(img_bytes)
-            logger.info(f"Image encoded successfully: {encoded_size} bytes")
-            
-            return base64.b64encode(img_bytes).decode('utf-8')
-        except Exception as e:
-            logger.error(f"Failed to encode image: {str(e)}")
-            logger.error(f"Image size: {image.size}, Mode: {image.mode}")
-            raise Exception(f"Failed to encode image: {str(e)}")
-    
-    def _split_image_into_chunks(self, image: Image.Image) -> List[Tuple[Image.Image, Tuple[int, int]]]:
-        """
-        Split image into exactly 6 chunks for detailed analysis.
-        Uses a 2x3 grid layout to ensure uniform distribution.
-        
-        Args:
-            image: PIL Image object
-            
-        Returns:
-            List of tuples containing (chunk_image, chunk_position)
-        """
-        try:
-            width, height = image.size
-            overlap = self.chunk_overlap
-            
-            # Calculate chunk dimensions for 2x3 grid (6 chunks total)
-            # 2 rows, 3 columns
-            chunk_width = width // 3
-            chunk_height = height // 2
-            
-            # Ensure minimum chunk size
-            min_chunk_size = 300
-            if chunk_width < min_chunk_size or chunk_height < min_chunk_size:
-                logger.warning(f"Image too small for 6 chunks, using 4 chunks instead")
-                # Fallback to 2x2 grid for small images
-                chunk_width = width // 2
-                chunk_height = height // 2
-                grid_cols, grid_rows = 2, 2
-            else:
-                grid_cols, grid_rows = 3, 2
-            
-            chunks = []
-            chunk_index = 0
-            
-            for row in range(grid_rows):
-                for col in range(grid_cols):
-                    # Calculate chunk boundaries with overlap
-                    left = max(0, col * chunk_width - overlap)
-                    top = max(0, row * chunk_height - overlap)
-                    right = min(width, (col + 1) * chunk_width + overlap)
-                    bottom = min(height, (row + 1) * chunk_height + overlap)
-                    
-                    # Extract chunk
-                    chunk = image.crop((left, top, right, bottom))
-                    
-                    # Store chunk with its position and index
-                    chunks.append((chunk, (left, top, chunk_index)))
-                    chunk_index += 1
-            
-            logger.info(f"Split image into {len(chunks)} chunks ({grid_cols}x{grid_rows} grid) for analysis")
-            logger.info(f"Chunk dimensions: {chunk_width}x{chunk_height} pixels")
-            logger.info(f"Image dimensions: {width}x{height} pixels")
-            
-            return chunks
-            
-        except Exception as e:
-            logger.error(f"Failed to split image into chunks: {str(e)}")
-            raise Exception(f"Failed to split image into chunks: {str(e)}")
-    
-    def _create_chunk_prompt(self, page_number: int, chunk_position: Tuple[int, int, int], total_chunks: int) -> str:
-        """
-        Create optimized prompt for brand detection in a specific chunk.
+        Create optimized prompt for brand detection from extracted text.
         
         Args:
             page_number: Page number being analyzed
-            chunk_position: Position of the chunk (x, y, index)
-            total_chunks: Total number of chunks being analyzed
+            extracted_text: Complete text extracted from the page
             
         Returns:
-            Formatted prompt string for chunk analysis
+            Formatted prompt string for text analysis
         """
-        chunk_x, chunk_y, chunk_index = chunk_position
-        logger.info(f"Creating chunk analysis prompt for page {page_number}, chunk {chunk_index} at ({chunk_x}, {chunk_y})")
-        
-        # Determine chunk position description for better context
-        if total_chunks == 6:
-            # 2x3 grid layout
-            row = chunk_index // 3
-            col = chunk_index % 3
-            position_desc = f"fila {row + 1}, columna {col + 1}"
-        elif total_chunks == 4:
-            # 2x2 grid layout (fallback)
-            row = chunk_index // 2
-            col = chunk_index % 2
-            position_desc = f"fila {row + 1}, columna {col + 1}"
-        else:
-            position_desc = f"fragmento {chunk_index + 1}"
+        logger.info(f"Creating text analysis prompt for page {page_number}")
         
         return f"""
-        Eres un experto analista especializado en detectar marcas comerciales en fragmentos de planos arquitectónicos. 
-        Analiza este fragmento específico de un plano arquitectónico (página {page_number}, {position_desc}) 
-        y detecta TODAS las marcas comerciales mencionadas como texto.
+        Eres un experto analista especializado en detectar marcas comerciales en texto extraído de planos arquitectónicos. 
+        Analiza el siguiente texto extraído de un plano arquitectónico (página {page_number}) y detecta TODAS las marcas comerciales mencionadas.
 
-        CONTEXTO DEL FRAGMENTO:
-        - Este es el {position_desc} de {total_chunks} fragmentos totales
-        - Índice del fragmento: {chunk_index + 1}
-        - Posición en el plano: coordenadas ({chunk_x}, {chunk_y})
-        - Enfócate únicamente en el contenido visible en este fragmento específico
-
-        METODOLOGÍA DE ANÁLISIS PARA FRAGMENTOS:
-        
-        1. **ANÁLISIS DETALLADO DEL FRAGMENTO**:
-           - Examina cada elemento de texto visible en este fragmento
-           - Busca marcas en cualquier orientación (horizontal, vertical, diagonal)
-           - Considera texto de diferentes tamaños y estilos
-           - Revisa especificaciones, notas y anotaciones en este área
-        
-        2. **ÁREAS ESPECÍFICAS A REVISAR EN ESTE FRAGMENTO**:
-           - Títulos y subtítulos
-           - Especificaciones técnicas
-           - Notas y anotaciones
-           - Leyendas y símbolos
-           - Detalles de equipos y materiales
-           - Números de modelo que incluyen marcas
-           - Información de fabricantes
-           - Cualquier texto que pueda contener nombres de marcas
-        
-        3. **TIPOS DE MARCAS A DETECTAR**:
-           - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, Schneider, ABB, etc.)
-           - Materiales de construcción (Cemex, Holcim, Cementos Argos, Corona, etc.)
-           - Equipos de iluminación (Philips, Osram, GE, Sylvania, etc.)
-           - Sistemas de seguridad (Honeywell, Johnson Controls, Bosch Security, etc.)
-           - Equipos de aire acondicionado (Carrier, Trane, York, Daikin, Mitsubishi, etc.)
-           - Herramientas y equipos (Makita, DeWalt, Milwaukee, Bosch, Hilti, etc.)
-           - Pinturas y acabados (Sherwin-Williams, PPG, Comex, Pinturas Osel, etc.)
-           - Plomería y sanitarios (Kohler, Toto, American Standard, Corona, etc.)
-           - Pisos y acabados (Armstrong, Mohawk, Porcelanite, etc.)
-           - Equipos de cocina (Whirlpool, Samsung, LG, Bosch, etc.)
-           - Sistemas de audio/video (Sony, Samsung, LG, Bose, etc.)
-           - Equipos de cómputo (Dell, HP, Lenovo, Apple, etc.)
-           - Equipos de red (Cisco, TP-Link, Netgear, etc.)
-           - Cualquier otra marca comercial reconocible
-        
-        4. **CRITERIOS DE DETECCIÓN**:
-           - Busca nombres de marcas completos y abreviados
-           - Incluye variaciones de escritura (ej: "Samsung" y "SAMSUNG")
-           - Detecta marcas en combinación con números de modelo
-           - Considera marcas en contexto de especificaciones
-           - Incluye marcas mencionadas en listas de materiales
-        
-        5. **EXCLUSIONES ESPECÍFICAS**:
-           - Hergon y todas sus variantes (Grupo Hergon SA, Hergon SA, etc.)
-           - Nombres genéricos de productos (ej: "lámpara", "interruptor")
-           - Nombres de materiales genéricos (ej: "concreto", "acero")
-           - Nombres de empresas que no son marcas comerciales
-           - Texto que no representa marcas comerciales
-        
-        EJEMPLOS DE DETECCIÓN CORRECTA:
-        ✅ "Samsung" 
-        ✅ "LG" 
-        ✅ "Bosch" 
-        ✅ "Philips" 
-        ✅ "Carrier" 
-        ✅ "Kohler" 
-        ✅ "Cemex" 
-        ✅ "Aluzinc" 
-        ❌ "Hergon" (excluido)
-        ❌ "lámpara LED" (descripción genérica)
-        ❌ "interruptor simple" (descripción genérica)
-        
-        INSTRUCCIONES FINALES:
-        - Analiza únicamente el contenido visible en este fragmento específico
-        - Si no encuentras marcas en este fragmento, responde con una lista vacía
-        - Responde ÚNICAMENTE con el JSON especificado
-        - Asegúrate de que el JSON sea válido y completo
-        
-        Formato de respuesta requerido:
-        {{
-            "brands_detected": [
-                "Nombre exacto de la marca 1",
-                "Nombre exacto de la marca 2"
-            ],
-            "chunk_position": [{chunk_x}, {chunk_y}],
-            "chunk_index": {chunk_index},
-            "page_number": {page_number}
-        }}
-
-        Responde únicamente con el JSON, sin texto adicional ni explicaciones.
-        """
-    
-    def _create_prompt(self, page_number: int) -> str:
-        """
-        Create optimized prompt for brand detection.
-        
-        Args:
-            page_number: Page number being analyzed
-            
-        Returns:
-            Formatted prompt string
-        """
-        logger.info(f"Creating optimized brand detection prompt for page {page_number}")
-        
-        return f"""
-        Eres un experto analista de planos arquitectónicos especializado en detectar marcas comerciales. Analiza esta imagen de un plano arquitectónico (página {page_number}) y detecta TODAS las marcas comerciales mencionadas como texto.
+        TEXTO EXTRAÍDO DEL PLANO (PÁGINA {page_number}):
+        {extracted_text}
 
         METODOLOGÍA DE ANÁLISIS SISTEMÁTICO:
         
-        1. **ESCANEO VISUAL COMPLETO**:
-           - Revisa cada centímetro cuadrado de la imagen
-           - Examina TODAS las áreas con texto o gráfico sin importar el tamaño
-           - Busca en orientación horizontal, vertical y diagonal
-           - Considera texto en diferentes tamaños de fuente
+        1. **ANÁLISIS COMPLETO DEL TEXTO**:
+           - Revisa cada palabra y frase del texto extraído
+           - Examina TODAS las líneas y párrafos sin importar el contexto
+           - Busca marcas en diferentes formatos (mayúsculas, minúsculas, mixtas)
+           - Considera variaciones de escritura y abreviaciones
+           - Analiza nombres de modelos y números de serie que puedan indicar marcas
         
-        2. **UBICACIONES ESPECÍFICAS A REVISAR**:
-           - Títulos principales y subtítulos
-           - Especificaciones técnicas y notas
-           - Leyendas y símbolos con texto
-           - Detalles de equipos y materiales
-           - Anotaciones y comentarios
-           - Tablas y listas de especificaciones
-           - Referencias y notas al pie
-           - Nombres de secciones y áreas
-           - Especificaciones de productos
-           - Marcas en dibujos y diagramas
-           - Texto en esquinas y márgenes
-           - Información de fabricantes
-        
-        3. **FORMATOS DE TEXTO A CONSIDERAR**:
-           - Texto impreso y manuscrito
-           - Mayúsculas, minúsculas y mixtas
-           - Texto con diferentes estilos (negrita, cursiva, etc.)
-           - Números de modelo que incluyen marcas
-           - Abreviaciones de marcas conocidas
-           - Texto en diferentes idiomas
-           - Marcas con símbolos especiales
-        
-        4. **TIPOS DE MARCAS A DETECTAR**:
-           - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, Schneider, ABB, etc.)
-           - Materiales de construcción (Cemex, Holcim, Cementos Argos, Corona, etc.)
-           - Equipos de iluminación (Philips, Osram, GE, Sylvania, etc.)
-           - Sistemas de seguridad (Honeywell, Johnson Controls, Bosch Security, etc.)
-           - Equipos de aire acondicionado (Carrier, Trane, York, Daikin, Mitsubishi, etc.)
-           - Herramientas y equipos (Makita, DeWalt, Milwaukee, Bosch, Hilti, etc.)
-           - Pinturas y acabados (Sherwin-Williams, PPG, Comex, Pinturas Osel, etc.)
-           - Plomería y sanitarios (Kohler, Toto, American Standard, Corona, etc.)
-           - Pisos y acabados (Armstrong, Mohawk, Porcelanite, etc.)
-           - Equipos de cocina (Whirlpool, Samsung, LG, Bosch, etc.)
-           - Sistemas de audio/video (Sony, Samsung, LG, Bose, etc.)
-           - Equipos de cómputo (Dell, HP, Lenovo, Apple, etc.)
-           - Equipos de red (Cisco, TP-Link, Netgear, etc.)
+        2. **TIPOS DE MARCAS A DETECTAR**:
+           - Equipos eléctricos y electrónicos (Samsung, LG, Bosch, Siemens, Schneider, ABB, General Electric, Westinghouse, etc.)
+           - Materiales de construcción (Cemex, Holcim, Cementos Argos, Corona, LafargeHolcim, etc.)
+           - Equipos de iluminación (Philips, Osram, GE Lighting, Sylvania, Cree, etc.)
+           - Sistemas de seguridad (Honeywell, Johnson Controls, Bosch Security, Axis, Hikvision, etc.)
+           - Equipos de aire acondicionado (Carrier, Trane, York, Daikin, Mitsubishi Electric, Lennox, etc.)
+           - Herramientas y equipos (Makita, DeWalt, Milwaukee, Bosch, Hilti, Caterpillar, etc.)
+           - Pinturas y acabados (Sherwin-Williams, PPG, Comex, Pinturas Osel, Benjamin Moore, etc.)
+           - Plomería y sanitarios (Kohler, Toto, American Standard, Corona, Moen, Delta, etc.)
+           - Pisos y acabados (Armstrong, Mohawk, Porcelanite, Tarkett, Shaw, etc.)
+           - Equipos de cocina (Whirlpool, Samsung, LG, Bosch, KitchenAid, Frigidaire, etc.)
+           - Sistemas de audio/video (Sony, Samsung, LG, Bose, JBL, Yamaha, etc.)
+           - Equipos de cómputo (Dell, HP, Lenovo, Apple, IBM, Microsoft, etc.)
+           - Equipos de red (Cisco, TP-Link, Netgear, Ubiquiti, D-Link, etc.)
+           - Equipos médicos (Philips Healthcare, GE Healthcare, Siemens Healthineers, etc.)
+           - Elevadores y escaleras (Otis, Schindler, KONE, ThyssenKrupp, etc.)
            - Cualquier otra marca comercial reconocible
         
-        5. **CRITERIOS DE DETECCIÓN**:
+        3. **CRITERIOS DE DETECCIÓN**:
            - Busca nombres de marcas completos y abreviados
            - Incluye variaciones de escritura (ej: "Samsung" y "SAMSUNG")
            - Detecta marcas en combinación con números de modelo
            - Considera marcas en contexto de especificaciones
            - Incluye marcas mencionadas en listas de materiales
            - Detecta marcas en notas técnicas y especificaciones
+           - Considera marcas en diferentes idiomas (español e inglés)
         
-        6. **EXCLUSIONES ESPECÍFICAS**:
-           - Hergon y todas sus variantes (Grupo Hergon SA, Hergon SA, etc.)
-           - Nombres genéricos de productos (ej: "lámpara", "interruptor")
-           - Nombres de materiales genéricos (ej: "concreto", "acero")
-           - Nombres de empresas que no son marcas comerciales
-           - Texto que no representa marcas comerciales
+        4. **EXCLUSIONES ESPECÍFICAS**:
+           - Hergonsa y todas sus variantes (HERGONSA, hergonsa, Grupo Hergonsa, Hergonsa SA, etc.)
+           - Nombres genéricos de productos (ej: "lámpara", "interruptor", "cable", "tubo")
+           - Nombres de materiales genéricos (ej: "concreto", "acero", "aluminio", "cobre")
+           - Nombres de empresas que no son marcas comerciales reconocidas
+           - Texto que no representa marcas comerciales (códigos, referencias, medidas)
+           - Palabras comunes que no son marcas (colores, formas, tamaños)
+           - Términos técnicos genéricos (voltaje, amperaje, frecuencia)
         
-        7. **PROCESO DE VALIDACIÓN**:
+        5. **PROCESO DE VALIDACIÓN**:
            - Verifica que cada detección sea una marca comercial real
            - Confirma que el texto detectado sea legible y completo
            - Asegúrate de que no sean nombres genéricos o descriptivos
@@ -362,14 +133,13 @@ class BrandDetectionService:
         ✅ "Carrier" 
         ✅ "Kohler" 
         ✅ "Cemex" 
-        ✅ "Aluzinc" 
-        ❌ "Hergon" (excluido)
+        ❌ "Hergonsa" (excluido - nombre de la empresa cliente)
         ❌ "lámpara LED" (descripción genérica)
         ❌ "interruptor simple" (descripción genérica)
         
         INSTRUCCIONES FINALES:
-        - Realiza un análisis exhaustivo y sistemático
-        - No te apresures, revisa cada área con atención
+        - Analiza exhaustivamente todo el texto proporcionado
+        - No te apresures, revisa cada palabra con atención
         - Si no encuentras marcas, responde con una lista vacía
         - Responde ÚNICAMENTE con el JSON especificado
         - Asegúrate de que el JSON sea válido y completo
@@ -380,71 +150,56 @@ class BrandDetectionService:
                 "Nombre exacto de la marca 1",
                 "Nombre exacto de la marca 2"
             ],
-            "page_number": {page_number}
+            "page_number": {page_number},
+            "text_analysis_summary": "Resumen breve del análisis realizado"
         }}
 
         Responde únicamente con el JSON, sin texto adicional ni explicaciones.
         """
     
-    async def detect_brands_in_chunk(
+    async def detect_brands_from_text(
         self, 
-        chunk_image: Image.Image, 
-        chunk_position: Tuple[int, int, int],
-        page_number: int,
-        total_chunks: int
+        extracted_text: str, 
+        page_number: int
     ) -> List[str]:
         """
-        Detect brands in a single image chunk using Gemini 2.5.
+        Detect brands from extracted text using Gemini 2.5.
         
         Args:
-            chunk_image: PIL Image chunk
-            chunk_position: Position of the chunk (x, y)
+            extracted_text: Complete text extracted from the page
             page_number: Page number being analyzed
-            total_chunks: Total number of chunks being analyzed
             
         Returns:
-            List of detected brands in this chunk
+            List of detected brands
         """
         async with self.semaphore:  # Rate limiting
             try:
                 start_time = time.time()
-                chunk_x, chunk_y, chunk_index = chunk_position
-                logger.info(f"Starting chunk analysis for page {page_number}, chunk {chunk_index} at ({chunk_x}, {chunk_y})")
+                logger.info(f"Starting text-based brand detection for page {page_number}")
+                logger.info(f"Text length: {len(extracted_text)} characters")
                 
-                # Encode chunk image to base64
-                base64_chunk = self._encode_image_to_base64(chunk_image)
+                if not extracted_text or extracted_text.strip() == "":
+                    logger.info(f"No text extracted for page {page_number} - no brands to detect")
+                    return []
                 
-                # Create chunk-specific prompt
-                prompt = self._create_chunk_prompt(page_number, chunk_position, total_chunks)
+                # Create text analysis prompt
+                prompt = self._create_text_analysis_prompt(page_number, extracted_text)
                 
-                # Create message with chunk image
-                message = HumanMessage(
-                    content=[
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_chunk}"
-                            }
-                        }
-                    ]
-                )
+                # Create message with text
+                message = HumanMessage(content=prompt)
                 
                 # Get response from Gemini
                 try:
-                    response = await self.llm_instances[chunk_index % len(self.llm_instances)].ainvoke([message])
+                    response = await self.llm_instances[page_number % len(self.llm_instances)].ainvoke([message])
                     response_text = response.content
-                    logger.info(f"Received chunk response for page {page_number}, chunk {chunk_index}: {len(response_text)} characters")
+                    logger.info(f"Received text analysis response for page {page_number}: {len(response_text)} characters")
                 except Exception as e:
-                    logger.error(f"Error getting Gemini response for chunk {chunk_index}: {str(e)}")
+                    logger.error(f"Error getting Gemini response for page {page_number}: {str(e)}")
                     return []
                 
                 # Parse response
                 if not response_text or response_text.strip() == "":
-                    logger.info(f"Empty response for chunk {chunk_index} - no brands detected")
+                    logger.info(f"Empty response for page {page_number} - no brands detected")
                     return []
                 
                 # Extract JSON from response
@@ -453,7 +208,7 @@ class BrandDetectionService:
                     json_str = json_match.group()
                     result = json.loads(json_str)
                 else:
-                    logger.warning(f"No JSON pattern found in chunk response {chunk_index}, trying to parse entire response")
+                    logger.warning(f"No JSON pattern found in response for page {page_number}, trying to parse entire response")
                     result = json.loads(response_text)
                 
                 # Validate and extract brands
@@ -471,33 +226,39 @@ class BrandDetectionService:
                         ]
                         
                         processing_time = time.time() - start_time
-                        logger.info(f"Chunk analysis completed for chunk {chunk_index}: {len(brands)} brands found in {processing_time:.2f} seconds")
+                        logger.info(f"Text analysis completed for page {page_number}: {len(brands)} brands found in {processing_time:.2f} seconds")
                         
                         if brands:
-                            logger.info(f"Brands detected in chunk {chunk_index}: {brands}")
+                            logger.info(f"Brands detected on page {page_number}: {brands}")
                         
                         return brands
                 
-                logger.warning(f"Invalid response format for chunk {chunk_index}")
+                logger.warning(f"Invalid response format for page {page_number}")
                 return []
                 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse chunk response as JSON for chunk {chunk_index}: {str(e)}")
+                logger.error(f"Failed to parse response as JSON for page {page_number}: {str(e)}")
                 return []
             except Exception as e:
-                logger.error(f"Chunk analysis failed for chunk {chunk_index}: {str(e)}")
+                logger.error(f"Text analysis failed for page {page_number}: {str(e)}")
                 return []
     
-    async def detect_brands_in_image(
+    async def detect_brands_in_image_file(
         self, 
-        image, 
+        image_path: str, 
         page_number: int
     ) -> BrandDetectionCreate:
         """
-        Detect brands in a single image using chunk-based analysis with Gemini 2.5.
+        Detect brands in a grayscale image file using memory-efficient OCR + LLM pipeline.
+        
+        Process:
+        1. Load grayscale image from file for OCR analysis
+        2. Extract text from all chunks using memory-efficient processing
+        3. Analyze the complete page text with LLM for brand detection
+        4. Free all memory immediately after processing
         
         Args:
-            image: PIL Image object
+            image_path: Path to the grayscale image file
             page_number: Page number being analyzed
             
         Returns:
@@ -505,211 +266,86 @@ class BrandDetectionService:
         """
         try:
             start_time = time.time()
-            logger.info(f"Starting chunk-based brand detection for page {page_number}")
-            logger.info(f"Image size: {image.size}, Mode: {image.mode}")
+            logger.info(f"Starting memory-efficient OCR + LLM brand detection for page {page_number}")
+            logger.info(f"Image file: {image_path}")
             
-            # Split image into chunks
-            logger.info(f"Splitting image into chunks for page {page_number}")
-            chunks = self._split_image_into_chunks(image)
+            # Step 1: Extract text using memory-efficient chunk-based OCR
+            logger.info(f"Step 1: Extracting text using memory-efficient OCR for page {page_number}")
+            ocr_result = await self.ocr_service.extract_text_from_image_file(image_path, page_number)
             
-            if not chunks:
-                logger.warning(f"No valid chunks created for page {page_number}, falling back to full image analysis")
-                return await self._detect_brands_full_image(image, page_number)
+            extracted_text = ocr_result['full_text']
+            text_detections = ocr_result['text_detections']
+            ocr_processing_time = ocr_result['processing_time']
             
-            logger.info(f"Created {len(chunks)} chunks for analysis")
+            logger.info(f"Memory-efficient OCR completed for page {page_number}: {len(extracted_text)} characters extracted from {len(text_detections)} text detections in {ocr_processing_time:.2f} seconds")
             
-            # Create tasks for concurrent chunk analysis
-            tasks = []
-            for chunk_image, chunk_position in chunks:
-                task = self.detect_brands_in_chunk(
-                    chunk_image, 
-                    chunk_position, 
-                    page_number, 
-                    len(chunks)
+            if not extracted_text or extracted_text.strip() == "":
+                logger.warning(f"No text extracted from page {page_number} - no brands to detect")
+                return BrandDetectionCreate(
+                    page_number=page_number,
+                    brands_detected=[]
                 )
-                tasks.append(task)
             
-            # Execute chunk analysis concurrently
-            logger.info(f"Executing {len(tasks)} chunk analysis tasks concurrently")
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Step 2: Analyze the complete page text for brands using LLM
+            logger.info(f"Step 2: Analyzing complete page text for brands on page {page_number}")
+            logger.info(f"Text sample for LLM analysis: {extracted_text[:500]}...")
             
-            # Collect all brands from all chunks
-            all_brands = []
-            for i, result in enumerate(chunk_results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error in chunk {i}: {str(result)}")
-                elif isinstance(result, list):
-                    all_brands.extend(result)
-                else:
-                    logger.warning(f"Unexpected result type from chunk {i}: {type(result)}")
+            detected_brands = await self.detect_brands_from_text(extracted_text, page_number)
             
-            # Remove duplicates while preserving order
-            unique_brands = []
-            seen_brands = set()
-            for brand in all_brands:
-                brand_lower = brand.lower().strip()
-                if brand_lower not in seen_brands:
-                    seen_brands.add(brand_lower)
-                    unique_brands.append(brand)
+            # Clear large text variables to free memory immediately
+            del extracted_text
+            del text_detections
+            del ocr_result
+            gc.collect()
             
-            # Calculate processing time
-            processing_time = time.time() - start_time
-            logger.info(f"Chunk-based brand detection completed for page {page_number}: {len(unique_brands)} unique brands found in {processing_time:.2f} seconds")
+            # Calculate total processing time
+            total_processing_time = time.time() - start_time
+            logger.info(f"Memory-efficient OCR + LLM brand detection completed for page {page_number}: {len(detected_brands)} brands found in {total_processing_time:.2f} seconds")
             
-            if unique_brands:
-                logger.info(f"Brands detected on page {page_number}: {unique_brands}")
+            if detected_brands:
+                logger.info(f"Brands detected on page {page_number}: {detected_brands}")
+            else:
+                logger.info(f"No brands detected on page {page_number}")
             
             return BrandDetectionCreate(
                 page_number=page_number,
-                brands_detected=unique_brands
+                brands_detected=detected_brands
             )
             
         except Exception as e:
-            logger.error(f"Chunk-based brand detection failed for page {page_number}: {str(e)}")
-            logger.info(f"Falling back to full image analysis for page {page_number}")
-            return await self._detect_brands_full_image(image, page_number)
+            logger.error(f"Memory-efficient OCR + LLM brand detection failed for page {page_number}: {str(e)}")
+            # Return empty result instead of raising exception
+            return BrandDetectionCreate(
+                page_number=page_number,
+                brands_detected=[]
+            )
     
-    async def _detect_brands_full_image(
+    async def detect_brands_in_multiple_image_files(
         self, 
-        image, 
-        page_number: int
-    ) -> BrandDetectionCreate:
-        """
-        Fallback method: Detect brands in full image using original method.
-        
-        Args:
-            image: PIL Image object
-            page_number: Page number being analyzed
-            
-        Returns:
-            BrandDetectionCreate object with detected brands
-        """
-        async with self.semaphore:  # Rate limiting
-            try:
-                start_time = time.time()
-                logger.info(f"Starting full image brand detection for page {page_number}")
-                
-                # Encode image to base64
-                base64_image = self._encode_image_to_base64(image)
-                
-                # Create prompt
-                prompt = self._create_prompt(page_number)
-                
-                # Create message with image
-                message = HumanMessage(
-                    content=[
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                )
-                
-                # Get response from Gemini
-                try:
-                    response = await self.llm_instances[page_number % len(self.llm_instances)].ainvoke([message])
-                    response_text = response.content
-                    logger.info(f"Received full image response for page {page_number}: {len(response_text)} characters")
-                except Exception as e:
-                    logger.error(f"Error getting Gemini response for page {page_number}: {str(e)}")
-                    raise Exception(f"Error getting AI response for page {page_number}: {str(e)}")
-                
-                # Handle empty responses
-                if not response_text or response_text.strip() == "":
-                    logger.info(f"Empty response from Gemini for page {page_number} - treating as no brands detected")
-                    result = {
-                        "brands_detected": [],
-                        "page_number": page_number
-                    }
-                else:
-                    # Extract JSON from response
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        json_str = json_match.group()
-                        result = json.loads(json_str)
-                    else:
-                        logger.warning(f"No JSON pattern found in response for page {page_number}, trying to parse entire response")
-                        result = json.loads(response_text)
-                
-                # Validate response structure
-                if not isinstance(result, dict):
-                    logger.error(f"Invalid response format for page {page_number}: expected dictionary")
-                    raise Exception("Invalid response format: expected dictionary")
-                
-                if "brands_detected" not in result:
-                    logger.error(f"Invalid response format for page {page_number}: missing 'brands_detected' field")
-                    raise Exception("Invalid response format: missing 'brands_detected' field")
-                
-                # Ensure brands_detected is a list
-                brands_detected = result["brands_detected"]
-                if not isinstance(brands_detected, list):
-                    brands_detected = [brands_detected] if brands_detected else []
-                
-                # Filter out empty strings and normalize
-                brands_detected = [
-                    brand.strip() for brand in brands_detected 
-                    if brand and brand.strip()
-                ]
-                
-                # Filter out Hergon and its variants
-                excluded_brands = ['hergon', 'grupo hergon', 'hergon sa', 'grupo hergon sa']
-                brands_detected = [
-                    brand for brand in brands_detected
-                    if not any(excluded.lower() in brand.lower() for excluded in excluded_brands)
-                ]
-                
-                # Calculate processing time
-                processing_time = time.time() - start_time
-                logger.info(f"Full image brand detection completed for page {page_number}: {len(brands_detected)} brands found in {processing_time:.2f} seconds")
-                
-                if brands_detected:
-                    logger.info(f"Brands detected on page {page_number}: {brands_detected}")
-                
-                return BrandDetectionCreate(
-                    page_number=page_number,
-                    brands_detected=brands_detected
-                )
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse AI response as JSON for page {page_number}: {str(e)}")
-                logger.error(f"Response text: {response_text[:500]}...")  # Log first 500 chars
-                raise Exception(f"Failed to parse AI response as JSON: {str(e)}")
-            except Exception as e:
-                logger.error(f"Full image brand detection failed for page {page_number}: {str(e)}")
-                raise Exception(f"Brand detection failed: {str(e)}")
-    
-    async def detect_brands_in_multiple_images(
-        self, 
-        images: List[Image.Image]
+        image_paths: List[str]
     ) -> List[BrandDetectionCreate]:
         """
-        Detect brands in multiple images with optimized parallel processing.
+        Detect brands in multiple grayscale image files with memory-efficient parallel processing.
         
         Args:
-            images: List of PIL Image objects
+            image_paths: List of paths to grayscale image files
             
         Returns:
             List of BrandDetectionCreate objects
         """
         try:
-            logger.info(f"Starting optimized brand detection for {len(images)} images")
+            logger.info(f"Starting memory-efficient brand detection for {len(image_paths)} image files")
             
             # Create tasks for concurrent processing with better error handling
             tasks = []
-            for i, image in enumerate(images):
+            for i, image_path in enumerate(image_paths):
                 page_number = i + 1
-                logger.info(f"Creating task for page {page_number}")
-                task = self.detect_brands_in_image(image, page_number)
+                logger.info(f"Creating task for page {page_number}: {image_path}")
+                task = self.detect_brands_in_image_file(image_path, page_number)
                 tasks.append(task)
             
             # Execute tasks concurrently with improved error handling
-            logger.info(f"Executing {len(tasks)} tasks concurrently")
+            logger.info(f"Executing {len(tasks)} memory-efficient tasks concurrently")
             results = await asyncio.gather(
                 *tasks,
                 return_exceptions=True
@@ -719,7 +355,7 @@ class BrandDetectionService:
             valid_results = []
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Error processing page {i+1}: {str(result)}")
+                    logger.error(f"Error processing page {i+1} from {image_paths[i]}: {str(result)}")
                     # Create empty result for failed pages
                     valid_results.append(BrandDetectionCreate(
                         page_number=i+1,
@@ -728,12 +364,12 @@ class BrandDetectionService:
                 else:
                     valid_results.append(result)
             
-            logger.info(f"Brand detection completed: {len(valid_results)} results, {len([r for r in results if isinstance(r, Exception)])} errors")
+            logger.info(f"Memory-efficient brand detection completed: {len(valid_results)} results, {len([r for r in results if isinstance(r, Exception)])} errors")
             return valid_results
             
         except Exception as e:
-            logger.error(f"Failed to process multiple images: {str(e)}")
-            raise Exception(f"Failed to process multiple images: {str(e)}")
+            logger.error(f"Failed to process multiple image files: {str(e)}")
+            raise Exception(f"Failed to process multiple image files: {str(e)}")
 
 
 # Global brand detection service instance

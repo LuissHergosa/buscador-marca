@@ -1,0 +1,123 @@
+services:
+  backend:
+    build: ./backend
+    container_name: buscador-marca-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Google Gemini API
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-2.0-flash-exp
+      
+      # Firebase Configuration
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-proyectoshergon}
+      - FIREBASE_PRIVATE_KEY_ID=${FIREBASE_PRIVATE_KEY_ID}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_CLIENT_ID=${FIREBASE_CLIENT_ID}
+      - FIREBASE_CLIENT_X509_CERT_URL=${FIREBASE_CLIENT_X509_CERT_URL}
+      
+      # Processing Configuration - Memory-Efficient for Windows GPU
+      - MAX_CONCURRENT_PAGES=2
+      - BATCH_SIZE=2
+      - MAX_CONCURRENT_BATCHES=1
+      - THREAD_POOL_SIZE=2
+      - CONNECTION_POOL_SIZE=3
+      
+      # Image Processing - High quality for Windows
+      - PDF_DPI=300
+      - MAX_IMAGE_SIZE=20000
+      - IMAGE_QUALITY=95
+      
+      # OCR Configuration - Windows GPU Optimized
+      - USE_GPU=true
+      - OCR_LANGUAGES=es,en
+      - OCR_CONFIDENCE_THRESHOLD=0.3
+      - OCR_MAX_RETRIES=3
+      - OCR_RETRY_DELAY=1.0
+      
+      # Performance Settings
+      - DEBUG=false
+      - PROCESSING_TIMEOUT=0
+      - REQUEST_TIMEOUT=0
+      - MAX_FILE_SIZE=0
+      
+      # Development
+      - ENVIRONMENT=development
+      
+      # LangChain (optional)
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT}
+    
+    volumes:
+      # Windows-optimized volume mounts
+      - ./backend/uploads:/app/uploads
+      - ./backend/models:/app/models
+      - ./backend/cache:/app/cache
+      - ./backend/logs:/app/logs
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # Windows-specific optimizations
+    runtime: nvidia
+    # Remove all resource limits to prevent unexpected crashes during heavy processing
+    # shm_size: unlimited (commented out)
+    # mem_limit: unlimited (commented out)
+    # cpus: unlimited (commented out)
+    
+    # Health check for Windows
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    networks:
+      - buscador-marca-network
+    
+    restart: unless-stopped
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: buscador-marca-frontend-dev
+    ports:
+      - "3000:5173"  # Vite dev server default port
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true  # Para compatibilidad con Windows Docker
+    volumes:
+      # Mount source code for hot reloading
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/bun.lock:/app/bun.lock
+      - ./frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/components.json:/app/components.json
+      # Exclude node_modules from being mounted
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - buscador-marca-network
+    restart: unless-stopped
+
+networks:
+  buscador-marca-network:
+    driver: bridge

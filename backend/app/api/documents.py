@@ -5,14 +5,16 @@ Document management API endpoints.
 import logging
 import os
 from typing import List
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi.responses import StreamingResponse
 import asyncio
 
-from ..models.document import Document, DocumentCreate
+from ..models.document import Document, DocumentCreate, DocumentUpdate
 from ..models.processing_status import ProcessingStatus
 from ..models.brand_detection import BrandReviewUpdate
 from ..services.processing_service import processing_service
 from ..services.firebase_service import firebase_service
+from ..services.excel_service import ExcelService
 from ..config import settings
 
 # Configure logging
@@ -50,14 +52,46 @@ def validate_file_extension(filename: str) -> None:
     logger.info(f"File extension validation passed: {file_ext}")
 
 
+async def _process_document_safely(document_id: str, file_content: bytes, filename: str):
+    """
+    Safely process document with proper error handling to prevent application exit.
+    
+    Args:
+        document_id: Document ID
+        file_content: PDF file content
+        filename: Original filename
+    """
+    try:
+        logger.info(f"Starting safe async document processing: {document_id}")
+        await processing_service.process_document_async(
+            document_id, file_content, filename
+        )
+        logger.info(f"Safe async document processing completed successfully: {document_id}")
+    except Exception as e:
+        logger.error(f"Safe async document processing failed for {document_id}: {str(e)}")
+        # Update document status to failed
+        try:
+            await firebase_service.update_document(
+                document_id, 
+                DocumentUpdate(status="failed")
+            )
+            logger.info(f"Document {document_id} status updated to 'failed'")
+        except Exception as update_error:
+            logger.error(f"Failed to update document {document_id} status: {str(update_error)}")
+
+
 @router.post("/upload", response_model=Document)
-async def upload_document(file: UploadFile = File(...)) -> Document:
+async def upload_document(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None
+) -> Document:
     """
     Upload a PDF document for brand detection analysis.
     Returns immediately after starting processing.
 
     Args:
         file: PDF file to upload
+        background_tasks: FastAPI background tasks
 
     Returns:
         Document object with processing status
@@ -89,13 +123,25 @@ async def upload_document(file: UploadFile = File(...)) -> Document:
         document = await firebase_service.create_document(document_data)
         logger.info(f"Document created in Firebase: {document.id}")
 
-        # Start async processing without waiting
-        logger.info("Starting async document processing")
-        asyncio.create_task(
-            processing_service.process_document_async(
-                document.id, file_content, file.filename
+        # Use FastAPI background tasks for safer async processing
+        if background_tasks:
+            logger.info("Starting async document processing with FastAPI background tasks")
+            background_tasks.add_task(
+                _process_document_safely, document.id, file_content, file.filename
             )
-        )
+        else:
+            # Fallback to manual task creation with proper error handling
+            logger.info("Starting async document processing with manual task creation")
+            task = asyncio.create_task(
+                _process_document_safely(document.id, file_content, file.filename)
+            )
+            
+            # Add simple error callback to prevent task exceptions from crashing the app
+            def task_done_callback(task):
+                if task.exception():
+                    logger.error(f"Background task failed but won't crash the app: {task.exception()}")
+            
+            task.add_done_callback(task_done_callback)
 
         logger.info(f"Document upload initiated successfully: {document.id}")
         return document
@@ -179,6 +225,127 @@ async def delete_document(document_id: str) -> dict:
         )
 
 
+@router.get("/{document_id}/results", response_model=Document)
+async def get_document_results(document_id: str) -> Document:
+    """
+    Get document with full processing results for frontend display.
+
+    Args:
+        document_id: Document ID
+
+    Returns:
+        Document object with complete results
+    """
+    try:
+        logger.info(f"API: Getting document results for {document_id}")
+        document = await firebase_service.get_document(document_id)
+        if not document:
+            logger.warning(f"API: Document not found: {document_id}")
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        logger.info(f"API: Retrieved document results for {document_id}: {len(document.results)} results")
+        return document
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to get document results {document_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document results: {str(e)}")
+
+
+@router.get("/{document_id}/summary")
+async def get_document_summary(document_id: str) -> dict:
+    """
+    Get document processing summary with statistics.
+
+    Args:
+        document_id: Document ID
+
+    Returns:
+        Document summary with brand statistics
+    """
+    try:
+        logger.info(f"API: Getting document summary for {document_id}")
+        document = await firebase_service.get_document(document_id)
+        if not document:
+            logger.warning(f"API: Document not found: {document_id}")
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Return summary if available, otherwise generate basic summary from results
+        if document.summary:
+            logger.info(f"API: Retrieved saved summary for {document_id}")
+            return {
+                "document_id": document_id,
+                "summary": document.summary,
+                "status": document.status
+            }
+        else:
+            # Generate basic summary from results
+            all_brands = set()
+            for result in document.results or []:
+                all_brands.update(result.brands_detected)
+            
+            basic_summary = {
+                "total_pages": document.total_pages,
+                "total_unique_brands": len(all_brands),
+                "all_detected_brands": sorted(list(all_brands)),
+                "status": document.status
+            }
+            
+            logger.info(f"API: Generated basic summary for {document_id}")
+            return {
+                "document_id": document_id,
+                "summary": basic_summary,
+                "status": document.status
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to get document summary {document_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document summary: {str(e)}")
+
+
+@router.get("/{document_id}/export/excel")
+async def export_document_excel(document_id: str):
+    """
+    Export document brand detection results as Excel file.
+
+    Args:
+        document_id: Document ID
+
+    Returns:
+        Excel file as StreamingResponse
+    """
+    try:
+        logger.info(f"API: Exporting document {document_id} to Excel")
+        
+        # Get document with results
+        document = await firebase_service.get_document(document_id)
+        if not document:
+            logger.warning(f"API: Document not found for Excel export: {document_id}")
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Generate Excel file
+        excel_service = ExcelService()
+        excel_buffer = excel_service.generate_document_results_excel(document)
+        filename = excel_service.generate_filename(document)
+        
+        logger.info(f"API: Excel file generated successfully for {document_id}, filename: {filename}")
+        
+        # Return as streaming response
+        return StreamingResponse(
+            iter([excel_buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to export document {document_id} to Excel: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export Excel: {str(e)}")
+
+
 @router.get("/{document_id}/status", response_model=ProcessingStatus)
 async def get_document_status(document_id: str) -> ProcessingStatus:
     """
@@ -225,34 +392,6 @@ async def cancel_processing(document_id: str) -> dict:
             status_code=500, detail=f"Failed to cancel processing: {str(e)}"
         )
 
-
-@router.get("/{document_id}/results")
-async def get_document_results(document_id: str) -> dict:
-    """
-    Get brand detection results for a document.
-
-    Args:
-        document_id: Document ID
-
-    Returns:
-        Document with results
-    """
-    try:
-        document = await firebase_service.get_document(document_id)
-        if not document:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        return {
-            "document_id": document.id,
-            "filename": document.filename,
-            "status": document.status,
-            "total_pages": document.total_pages,
-            "results": document.results or [],
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get results: {str(e)}")
 
 
 @router.post("/{document_id}/brands/review")

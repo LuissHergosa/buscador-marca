@@ -3,56 +3,93 @@ services:
     build: ./backend
     container_name: buscador-marca-backend
     ports:
-      - "0.0.0.0:8000:8000"
+      - "8000:8000"
     environment:
+      # Google Gemini API
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - GEMINI_MODEL=gemini-2.0-flash-exp
+      
+      # Firebase Configuration
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-proyectoshergon}
       - FIREBASE_PRIVATE_KEY_ID=${FIREBASE_PRIVATE_KEY_ID}
       - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
       - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
       - FIREBASE_CLIENT_ID=${FIREBASE_CLIENT_ID}
       - FIREBASE_CLIENT_X509_CERT_URL=${FIREBASE_CLIENT_X509_CERT_URL}
+      
+      # Processing Configuration - Memory-Efficient for Windows GPU
+      - MAX_CONCURRENT_PAGES=2
+      - BATCH_SIZE=2
+      - MAX_CONCURRENT_BATCHES=1
+      - THREAD_POOL_SIZE=2
+      - CONNECTION_POOL_SIZE=3
+      
+      # Image Processing - High quality for Windows
+      - PDF_DPI=300
+      - MAX_IMAGE_SIZE=20000
+      - IMAGE_QUALITY=95
+      
+      # OCR Configuration - Windows GPU Optimized
+      - USE_GPU=true
+      - OCR_LANGUAGES=es,en
+      - OCR_CONFIDENCE_THRESHOLD=0.3
+      - OCR_MAX_RETRIES=3
+      - OCR_RETRY_DELAY=1.0
+      
+      # Performance Settings
+      - DEBUG=false
+      - PROCESSING_TIMEOUT=0
+      - REQUEST_TIMEOUT=0
+      - MAX_FILE_SIZE=0
+      
+      # LangChain (optional)
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT}
-      - LANGSMITH_TRACING_V2=true
-      - DEBUG=true
-      - HOST=0.0.0.0
-      - PORT=8000
-      - MAX_FILE_SIZE=0
-      - MAX_CONCURRENT_PAGES=8
-      - PROCESSING_TIMEOUT=0
-      - BATCH_SIZE=8
-      - MAX_CONCURRENT_BATCHES=3
-      - PDF_DPI=300
-      - MAX_IMAGE_SIZE=20000
-      - IMAGE_QUALITY=85
-      - THREAD_POOL_SIZE=8
-      - CONNECTION_POOL_SIZE=10
-      - REQUEST_TIMEOUT=0
+    
     volumes:
-      - ./backend:/app
+      # Windows-optimized volume mounts
       - ./backend/uploads:/app/uploads
-    networks:
-      - buscador-marca-network
+      - ./backend/models:/app/models
+      - ./backend/cache:/app/cache
+      - ./backend/logs:/app/logs
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # Windows-specific optimizations
+    runtime: nvidia
+    # Remove all resource limits to prevent unexpected crashes during heavy processing
+    # shm_size: unlimited (commented out)
+    # mem_limit: unlimited (commented out) 
+    # cpus: unlimited (commented out)
+    
+    # Health check for Windows
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 60s
+    
+    networks:
+      - buscador-marca-network
+    
     restart: unless-stopped
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:
     build: ./frontend
     container_name: buscador-marca-frontend
     ports:
-      - "0.0.0.0:80:80"
-    environment:
-      - NODE_ENV=production
+      - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - buscador-marca-network
     restart: unless-stopped
@@ -60,6 +97,3 @@ services:
 networks:
   buscador-marca-network:
     driver: bridge
-
-volumes:
-  uploads:
